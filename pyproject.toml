@@ -20,6 +20,9 @@ dev = [
     "pytest>=8,<9",
 ]
 
+[project.scripts]
+qianji-map-keypoints = "qianji_animal_motion.semantic_cli:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
