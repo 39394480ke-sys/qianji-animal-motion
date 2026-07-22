@@ -2,7 +2,14 @@
 
 从动物视频提取关键点，并整理为可用于仿生运动分析的时间序列轨迹。
 
-当前标注方案包含六个关键点：`nose`（鼻尖）、`left_ear`（左耳）、`right_ear`（右耳）、`body_center`（躯干中心）、`tail_base`（尾根）和 `tail_tip`（尾尖）。
+当前输出固定包含六个语义关键点：
+
+- `spine_front`（躯干前部）
+- `spine_rear`（躯干后部）
+- `front_left_foot`（左前足）
+- `front_right_foot`（右前足）
+- `rear_left_foot`（左后足）
+- `rear_right_foot`（右后足）
 
 ## 安装
 
@@ -10,7 +17,7 @@
 
 ```bash
 conda env create -f environment.yml
-conda activate qianji-animal-motion
+conda activate animal_pose
 ```
 
 或使用现有 Python 环境：

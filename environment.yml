@@ -1,4 +1,4 @@
-name: qianji-animal-motion
+name: animal_pose
 channels:
   - conda-forge
 dependencies:

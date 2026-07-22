@@ -5,6 +5,9 @@ data/processed/*
 !data/processed/.gitkeep
 outputs/*
 !outputs/.gitkeep
+videos/
+weights/
+.cache/
 
 # Source media and model artifacts.
 *.avi
@@ -25,6 +28,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
 .coverage
 htmlcov/
 .venv/
