@@ -20,6 +20,9 @@ dev = [
     "pytest>=8,<9",
 ]
 
+[project.scripts]
+qianji-preprocess-video = "qianji_animal_motion.preprocess:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
