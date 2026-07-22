@@ -1,3 +1,3 @@
-"""Animal video keypoint trajectory tools for QianJi."""
+"""Animal mesh and video-motion input tools for QianJi."""
 
 __version__ = "0.1.0"

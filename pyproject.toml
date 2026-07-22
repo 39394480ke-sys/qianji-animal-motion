@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qianji-animal-motion"
 version = "0.1.0"
-description = "Animal video keypoint trajectories for the QianJi biomimetic project."
+description = "Animal mesh and video-motion input tools for the QianJi biomimetic project."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -19,6 +19,9 @@ gui = [
 dev = [
     "pytest>=8,<9",
 ]
+
+[project.scripts]
+qianji-convert-mesh = "qianji_animal_motion.mesh_convert:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
