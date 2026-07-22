@@ -61,4 +61,34 @@ qianji-map-keypoints \
 `mapping_report.json` 和 `six_keypoints_preview.mp4`。默认拒绝覆盖已有结果，
 明确需要重跑时使用 `--overwrite`。
 
+## 六点人工校正
+
+使用 CVAT Online 对六点结果做人工复核。程序只把轨迹转换为 CVAT 视频
+Skeleton，再将人工修改导回本项目；它不会修改原始 39 点 H5 或六点基线。
+
+先生成 CVAT 导入包：
+
+```bash
+qianji-export-cvat \
+  --video data/processed/cat_walk_30fps_720p.mp4 \
+  --trajectory outputs/semantic_six/cat_walk/keypoint_trajectory_2d.json \
+  --report outputs/semantic_six/cat_walk/mapping_report.json \
+  --output outputs/manual_correction/cat_walk/cvat_export
+```
+
+在 CVAT 中修改并导出 `CVAT for video 1.1` XML 后导回：
+
+```bash
+qianji-import-cvat \
+  --video data/processed/cat_walk_30fps_720p.mp4 \
+  --baseline outputs/semantic_six/cat_walk/keypoint_trajectory_2d.json \
+  --manifest outputs/manual_correction/cat_walk/cvat_export/cvat_manifest.json \
+  --annotations ~/Downloads/annotations.xml \
+  --output outputs/manual_correction/cat_walk/review_v1
+```
+
+每次复核使用新的 `review_v2`、`review_v3` 目录。两个命令都拒绝覆盖已经
+存在的产物，因此任意版本都可回退。完整操作见
+[`docs/cvat_manual_correction.md`](docs/cvat_manual_correction.md)。
+
 后续集成时，只将本项目中自有的代码复制到 `QianJi/video_pose_extraction`，不克隆或搬运上游 DeepLabCut 源码。

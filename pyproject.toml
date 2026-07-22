@@ -22,6 +22,8 @@ dev = [
 
 [project.scripts]
 qianji-map-keypoints = "qianji_animal_motion.semantic_cli:main"
+qianji-export-cvat = "qianji_animal_motion.cvat_correction:export_main"
+qianji-import-cvat = "qianji_animal_motion.cvat_correction:import_main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
