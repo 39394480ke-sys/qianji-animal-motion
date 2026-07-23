@@ -22,6 +22,7 @@ dev = [
 
 [project.scripts]
 qianji-convert-mesh = "qianji_animal_motion.mesh_convert:main"
+qianji-preprocess-video = "qianji_animal_motion.preprocess:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

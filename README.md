@@ -62,4 +62,26 @@ qianji-convert-mesh data/raw --output data/processed
 只有转换和验证全部成功才会生成最终 `.glb`，同时写入同名
 `.metadata.json`。默认不覆盖已有文件；明确需要替换时使用 `--overwrite`。
 
+## 视频预处理
+
+所有送入 DeepLabCut 的视频先统一为恒定 30 FPS、720p、H.264、
+`yuv420p` 且不含音频的 MP4。程序不会裁剪画面，也不会覆盖原视频。
+
+处理单个视频：
+
+```bash
+qianji-preprocess-video data/raw/cat_walk.mov \
+  --output data/processed/cat_walk_30fps_720p.mp4
+```
+
+批量处理目录中的视频：
+
+```bash
+qianji-preprocess-video data/raw --output data/processed
+```
+
+默认输出旁边会生成同名的 `.metadata.json`，记录转换参数以及转换前后的
+编解码、尺寸、帧率和音频信息。输出文件已经存在时程序会拒绝覆盖；明确需要
+替换时使用 `--overwrite`。
+
 后续集成时，只将本项目中自有的代码复制到 `QianJi/video_pose_extraction`，不克隆或搬运上游 DeepLabCut 源码。
