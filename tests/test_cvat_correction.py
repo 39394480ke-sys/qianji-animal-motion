@@ -12,6 +12,7 @@ from qianji_animal_motion.cvat_correction import (
     build_cvat_xml,
     build_review_queue,
     export_cvat_package,
+    import_cvat_package,
 )
 
 
@@ -102,6 +103,23 @@ def _xml_point(root: ET.Element, frame_idx: int, name: str) -> ET.Element:
     point = skeleton.find(f"./points[@label='{name}']")
     assert point is not None
     return point
+
+
+def _cvat_import_inputs(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict, str]:
+    baseline = _trajectory()
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"video fixture")
+    manifest = {
+        "schema": "qianji.cvat_correction_manifest",
+        "schema_version": "1.0.0",
+        "baseline_trajectory_sha256": _sha256(baseline_path),
+        "video_sha256": _sha256(video_path),
+    }
+    return baseline_path, video_path, manifest, build_cvat_xml(baseline)
 
 
 def test_cvat_export_writes_every_frame_as_an_explicit_keyframe() -> None:
@@ -318,3 +336,168 @@ def test_import_rejects_recovered_placeholder_at_zero_zero() -> None:
 
     with pytest.raises(ValueError, match="placeholder coordinates"):
         apply_cvat_corrections(baseline, ET.tostring(root, encoding="unicode"))
+
+
+def test_cvat_import_discards_staged_outputs_when_preview_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline, video, manifest, annotations = _cvat_import_inputs(tmp_path)
+    output_dir = tmp_path / "review"
+    output_dir.mkdir()
+    unrelated = output_dir / "notes.txt"
+    unrelated.write_text("keep me", encoding="utf-8")
+
+    def fail_preview(_video: Path, _result: object, output: Path) -> None:
+        output.write_bytes(b"partial preview")
+        raise RuntimeError("preview failed")
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.cvat_correction.render_preview",
+        fail_preview,
+    )
+
+    with pytest.raises(RuntimeError, match="preview failed"):
+        import_cvat_package(
+            baseline_path=baseline,
+            manifest=manifest,
+            annotations_xml=annotations,
+            output_dir=output_dir,
+            video_path=video,
+        )
+
+    assert unrelated.read_text(encoding="utf-8") == "keep me"
+    assert not any((output_dir / name).exists() for name in (
+        "keypoint_trajectory_2d_corrected.json",
+        "corrections.json",
+        "correction_report.json",
+        "six_keypoints_corrected_preview.mp4",
+    ))
+    assert not list(tmp_path.glob(".review.staging-*"))
+
+
+def test_cvat_import_discards_outputs_when_baseline_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline, video, manifest, annotations = _cvat_import_inputs(tmp_path)
+    output_dir = tmp_path / "review"
+
+    def mutate_baseline(_video: Path, _result: object, output: Path) -> None:
+        baseline.write_text('{"changed": true}', encoding="utf-8")
+        output.write_bytes(b"preview")
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.cvat_correction.render_preview",
+        mutate_baseline,
+    )
+
+    with pytest.raises(RuntimeError, match="baseline trajectory changed"):
+        import_cvat_package(
+            baseline_path=baseline,
+            manifest=manifest,
+            annotations_xml=annotations,
+            output_dir=output_dir,
+            video_path=video,
+        )
+
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(".review.staging-*"))
+
+
+def test_cvat_import_discards_outputs_when_source_video_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline, video, manifest, annotations = _cvat_import_inputs(tmp_path)
+    output_dir = tmp_path / "review"
+
+    def mutate_video(_video: Path, _result: object, output: Path) -> None:
+        video.write_bytes(b"changed during import")
+        output.write_bytes(b"preview")
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.cvat_correction.render_preview",
+        mutate_video,
+    )
+
+    with pytest.raises(RuntimeError, match="source video changed"):
+        import_cvat_package(
+            baseline_path=baseline,
+            manifest=manifest,
+            annotations_xml=annotations,
+            output_dir=output_dir,
+            video_path=video,
+        )
+
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(".review.staging-*"))
+
+
+def test_cvat_import_without_preview_publishes_three_json_files(
+    tmp_path: Path,
+) -> None:
+    baseline, _video, manifest, annotations = _cvat_import_inputs(tmp_path)
+    output_dir = tmp_path / "review"
+
+    paths = import_cvat_package(
+        baseline_path=baseline,
+        manifest=manifest,
+        annotations_xml=annotations,
+        output_dir=output_dir,
+        render_video=False,
+    )
+
+    assert paths.preview is None
+    assert paths.trajectory.is_file()
+    assert paths.corrections.is_file()
+    assert paths.report.is_file()
+    assert not list(tmp_path.glob(".review.staging-*"))
+
+
+def test_cvat_import_rolls_back_when_publishing_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline, video, manifest, annotations = _cvat_import_inputs(tmp_path)
+    output_dir = tmp_path / "review"
+    original_replace = Path.replace
+    publish_count = 0
+
+    def write_preview(_video: Path, _result: object, output: Path) -> None:
+        output.write_bytes(b"preview")
+
+    def fail_second_publish(source: Path, target: Path) -> Path:
+        nonlocal publish_count
+        target = Path(target)
+        if (
+            source.parent.name.startswith(".review.staging-")
+            and target.parent == output_dir
+        ):
+            publish_count += 1
+            if publish_count == 2:
+                raise OSError("publish failed")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.cvat_correction.render_preview",
+        write_preview,
+    )
+    monkeypatch.setattr(Path, "replace", fail_second_publish)
+
+    with pytest.raises(OSError, match="publish failed"):
+        import_cvat_package(
+            baseline_path=baseline,
+            manifest=manifest,
+            annotations_xml=annotations,
+            output_dir=output_dir,
+            video_path=video,
+        )
+
+    assert not any((output_dir / name).exists() for name in (
+        "keypoint_trajectory_2d_corrected.json",
+        "corrections.json",
+        "correction_report.json",
+        "six_keypoints_corrected_preview.mp4",
+    ))
+    assert not list(tmp_path.glob(".review.staging-*"))

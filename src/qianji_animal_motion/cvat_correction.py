@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Sequence
 import xml.etree.ElementTree as ET
 
@@ -54,6 +55,59 @@ class CvatImportPaths:
     corrections: Path
     report: Path
     preview: Path | None
+
+
+def _import_output_paths(paths: CvatImportPaths) -> tuple[Path, ...]:
+    return tuple(
+        path
+        for path in (
+            paths.trajectory,
+            paths.corrections,
+            paths.report,
+            paths.preview,
+        )
+        if path is not None
+    )
+
+
+def _publish_staged_import_outputs(
+    staged: CvatImportPaths,
+    final: CvatImportPaths,
+) -> None:
+    staged_paths = _import_output_paths(staged)
+    final_paths = _import_output_paths(final)
+    missing = [path for path in staged_paths if not path.is_file()]
+    if missing:
+        raise RuntimeError(f"staged output is missing: {missing[0]}")
+    output_dir = final.trajectory.parent
+    _ensure_output_available(
+        output_dir,
+        [path.name for path in final_paths],
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    published: list[tuple[Path, Path]] = []
+    try:
+        for staged_path, final_path in zip(
+            staged_paths,
+            final_paths,
+            strict=True,
+        ):
+            staged_path.replace(final_path)
+            published.append((final_path, staged_path))
+    except Exception as exc:
+        rollback_errors: list[OSError] = []
+        for final_path, staged_path in reversed(published):
+            if final_path.exists():
+                try:
+                    final_path.replace(staged_path)
+                except OSError as rollback_error:
+                    rollback_errors.append(rollback_error)
+        if rollback_errors:
+            raise RuntimeError(
+                "CVAT output publishing failed and rollback was incomplete"
+            ) from exc
+        raise
 
 
 def _sha256(path: Path) -> str:
@@ -504,7 +558,8 @@ def import_cvat_package(
     baseline_path = Path(baseline_path).resolve()
     output_dir = Path(output_dir)
     manifest_payload = _load_json(manifest) if isinstance(manifest, Path) else manifest
-    if manifest_payload.get("baseline_trajectory_sha256") != _sha256(baseline_path):
+    baseline_hash = _sha256(baseline_path)
+    if manifest_payload.get("baseline_trajectory_sha256") != baseline_hash:
         raise ValueError("baseline trajectory hash does not match CVAT manifest")
     baseline = _load_json(baseline_path)
     if isinstance(annotations_xml, Path):
@@ -513,10 +568,12 @@ def import_cvat_package(
         xml_text = annotations_xml
     corrected, corrections, report = apply_cvat_corrections(baseline, xml_text)
 
+    video_hash = None
     if video_path is not None:
         video_path = Path(video_path).resolve()
         expected_video_hash = manifest_payload.get("video_sha256")
-        if expected_video_hash and _sha256(video_path) != expected_video_hash:
+        video_hash = _sha256(video_path)
+        if expected_video_hash and video_hash != expected_video_hash:
             raise ValueError("video hash does not match CVAT manifest")
     if render_video and video_path is None:
         raise ValueError("video path is required when rendering a preview")
@@ -525,7 +582,6 @@ def import_cvat_package(
     if not render_video:
         owned.remove("six_keypoints_corrected_preview.mp4")
     _ensure_output_available(output_dir, owned)
-    output_dir.mkdir(parents=True, exist_ok=True)
     paths = CvatImportPaths(
         trajectory=output_dir / "keypoint_trajectory_2d_corrected.json",
         corrections=output_dir / "corrections.json",
@@ -536,17 +592,42 @@ def import_cvat_package(
             else None
         ),
     )
-    _write_json(paths.trajectory, corrected)
-    _write_json(paths.corrections, corrections)
-    report["baseline_trajectory_sha256"] = _sha256(baseline_path)
+    report["baseline_trajectory_sha256"] = baseline_hash
     report["manifest_schema_version"] = manifest_payload.get("schema_version")
-    _write_json(paths.report, report)
-    if render_video and paths.preview is not None and video_path is not None:
-        render_preview(
-            video_path,
-            MappingResult(trajectory=corrected, report=report),
-            paths.preview,
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(
+        prefix=f".{output_dir.name}.staging-",
+        dir=output_dir.parent,
+    ) as staging_name:
+        staging_dir = Path(staging_name)
+        staged = CvatImportPaths(
+            trajectory=staging_dir / paths.trajectory.name,
+            corrections=staging_dir / paths.corrections.name,
+            report=staging_dir / paths.report.name,
+            preview=(
+                staging_dir / paths.preview.name
+                if paths.preview is not None
+                else None
+            ),
         )
+        _write_json(staged.trajectory, corrected)
+        _write_json(staged.corrections, corrections)
+        _write_json(staged.report, report)
+        if render_video and staged.preview is not None and video_path is not None:
+            render_preview(
+                video_path,
+                MappingResult(trajectory=corrected, report=report),
+                staged.preview,
+            )
+        if _sha256(baseline_path) != baseline_hash:
+            raise RuntimeError("baseline trajectory changed during CVAT import")
+        if (
+            video_path is not None
+            and video_hash is not None
+            and _sha256(video_path) != video_hash
+        ):
+            raise RuntimeError("source video changed during CVAT import")
+        _publish_staged_import_outputs(staged, paths)
     return paths
 
 
