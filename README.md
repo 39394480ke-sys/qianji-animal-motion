@@ -39,14 +39,38 @@ python -c "from qianji_animal_motion import __version__; print(__version__)"
 
 DeepLabCut SuperAnimal-Quadruped 的 39 点原始结果保留不变。中间层读取
 H5 预测，将 `back_base`、`back_end` 分别映射为 `spine_front`、
-`spine_rear`，并将四个 paw 映射为四个足端：
+`spine_rear`，并将四个 paw 映射为四个足端。
+
+正式映射前，先生成最多 12 个左右腿清晰、置信度高的候选锚点：
+
+```bash
+qianji-suggest-anchor \
+  --video data/processed/cat_walk_30fps_720p.mp4 \
+  --predictions outputs/zero_shot/cat_walk/predictions.h5 \
+  --output outputs/anchor_review/cat_walk
+```
+
+程序会生成 `identity_anchor_candidates.jpg` 和
+`identity_anchor_candidates.json`。打开拼图，以动物自身方向选择一帧，
+并分别确认 DLC 前腿和后腿标签是正确（`keep`）还是需要交换（`swap`）。
+随后执行正式映射：
 
 ```bash
 qianji-map-keypoints \
   --video data/processed/cat_walk_30fps_720p.mp4 \
   --predictions outputs/zero_shot/cat_walk/predictions.h5 \
+  --anchor-manifest outputs/anchor_review/cat_walk/identity_anchor_candidates.json \
+  --anchor-frame 152 \
+  --front-anchor keep \
+  --rear-anchor keep \
   --output outputs/semantic_six/cat_walk
 ```
+
+人工锚点是正式结果的必需输入。候选 manifest 保存视频和 H5 的 SHA-256，
+映射时会验证哈希，防止混用输入。前腿和后腿分别从锚点向视频开头和结尾
+双向追踪。完全遮挡不会清除历史；重叠但仍有观测的帧保留当前身份并继续
+推进观测时间，避免把正常的腿部交叉误判为标签交换。无法可靠区分时，对应
+足端标记为 `identity_ambiguous` 并置空，不进行跨帧插值。
 
 程序用 `back_end -> back_middle -> back_base` 背部折线检查躯干结构，并且
 只在可靠帧证明相对位置稳定后，允许用同一帧的 `neck_end`、`tail_base`

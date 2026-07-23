@@ -141,19 +141,21 @@ def _ordered_pair(
     return right[frame], left[frame]
 
 
-def _transition_cost(
+def _transition_cost_between(
     left: np.ndarray,
     right: np.ndarray,
+    previous_frame: int,
     frame: int,
     previous_state: int,
     state: int,
     scale: float,
     switch_penalty: float,
 ) -> float:
-    previous = _ordered_pair(left, right, frame - 1, previous_state)
+    previous = _ordered_pair(left, right, previous_frame, previous_state)
     current = _ordered_pair(left, right, frame, state)
     cost = 0.0
     usable = 0
+    gap_scale = scale * math.sqrt(max(abs(frame - previous_frame), 1))
     for previous_leg, current_leg in zip(previous, current, strict=True):
         confidence = np.minimum(previous_leg[:, 2], current_leg[:, 2])
         finite = np.isfinite(previous_leg[:, :2]).all(axis=1) & np.isfinite(
@@ -166,7 +168,7 @@ def _transition_cost(
             current_leg[reliable, :2] - previous_leg[reliable, :2], axis=1
         )
         weights = _JOINT_WEIGHTS[reliable] * confidence[reliable]
-        cost += float(np.sum(weights * np.square(distance / scale)))
+        cost += float(np.sum(weights * np.square(distance / gap_scale)))
         usable += int(reliable.sum())
     if usable == 0:
         return math.inf
@@ -180,10 +182,12 @@ def resolve_leg_identities(
     right: np.ndarray,
     *,
     scale: float,
+    anchor_frame: int = 0,
+    anchor_state: int = 0,
     switch_penalty: float = 0.0025,
     ambiguity_margin: float = 0.15,
 ) -> IdentityResolution:
-    """Resolve keep/swap states while anchoring frame zero to DLC identities."""
+    """Resolve keep/swap states in both directions from a confirmed anchor."""
     frame_count = len(left)
     if frame_count != len(right):
         raise ValueError("left and right leg sequences must have equal length")
@@ -192,57 +196,55 @@ def resolve_leg_identities(
             states=np.empty(0, dtype=np.int8),
             ambiguous=np.empty(0, dtype=bool),
         )
+    if not 0 <= anchor_frame < frame_count:
+        raise ValueError("anchor frame must be within the leg sequence")
+    if anchor_state not in (0, 1):
+        raise ValueError("anchor state must be 0 (keep) or 1 (swap)")
+
     scale = max(float(scale), 1.0)
-    costs = np.full((frame_count, 2), math.inf, dtype=float)
-    parents = np.zeros((frame_count, 2), dtype=np.int8)
-    costs[0, 0] = 0.0
-    for frame in range(1, frame_count):
-        for state in (0, 1):
-            candidates = [
-                costs[frame - 1, previous]
-                + _transition_cost(
-                    left,
-                    right,
-                    frame,
-                    previous,
-                    state,
-                    scale,
-                    switch_penalty,
-                )
-                for previous in (0, 1)
-            ]
-            parent = int(np.argmin(candidates))
-            costs[frame, state] = candidates[parent]
-            parents[frame, state] = parent
-
-    states = np.zeros(frame_count, dtype=np.int8)
-    states[-1] = int(np.argmin(costs[-1]))
-    for frame in range(frame_count - 1, 0, -1):
-        states[frame - 1] = parents[frame, states[frame]]
-
+    states = np.full(frame_count, anchor_state, dtype=np.int8)
     ambiguous = np.zeros(frame_count, dtype=bool)
-    for frame in range(1, frame_count):
-        previous_state = int(states[frame - 1])
-        alternatives = np.asarray(
-            [
-                _transition_cost(
-                    left,
-                    right,
-                    frame,
-                    previous_state,
-                    state,
-                    scale,
-                    switch_penalty,
-                )
-                for state in (0, 1)
-            ]
-        )
-        if not np.isfinite(alternatives).all():
-            ambiguous[frame] = True
-            continue
-        denominator = max(float(np.max(alternatives)), 1e-12)
-        margin = abs(float(alternatives[0] - alternatives[1])) / denominator
-        ambiguous[frame] = margin < ambiguity_margin
+
+    def track(indices: range) -> None:
+        last_reliable_frame = anchor_frame
+        last_reliable_state = anchor_state
+        for frame in indices:
+            alternatives = np.asarray(
+                [
+                    _transition_cost_between(
+                        left,
+                        right,
+                        last_reliable_frame,
+                        frame,
+                        last_reliable_state,
+                        state,
+                        scale,
+                        switch_penalty,
+                    )
+                    for state in (0, 1)
+                ],
+                dtype=float,
+            )
+            if not np.isfinite(alternatives).all():
+                states[frame] = last_reliable_state
+                ambiguous[frame] = True
+                continue
+
+            chosen = int(np.argmin(alternatives))
+            denominator = max(float(np.max(alternatives)), 1e-12)
+            margin = abs(float(alternatives[0] - alternatives[1])) / denominator
+            if margin < ambiguity_margin:
+                states[frame] = last_reliable_state
+                ambiguous[frame] = True
+                last_reliable_frame = frame
+                continue
+
+            states[frame] = chosen
+            last_reliable_frame = frame
+            last_reliable_state = chosen
+
+    track(range(anchor_frame + 1, frame_count))
+    track(range(anchor_frame - 1, -1, -1))
     return IdentityResolution(states=states, ambiguous=ambiguous)
 
 
@@ -550,6 +552,10 @@ def build_semantic_mapping(
     *,
     individual: str = "animal0",
     confidence_threshold: float = 0.5,
+    anchor_frame: int = 0,
+    front_anchor_state: int = 0,
+    rear_anchor_state: int = 0,
+    identity_anchor: dict | None = None,
 ) -> MappingResult:
     """Build JSON-ready six-point trajectories without modifying DLC predictions."""
     scorer = _validate_dataframe(df, individual)
@@ -575,9 +581,19 @@ def build_semantic_mapping(
         else math.hypot(video.width, video.height) / 2.0
     )
     front_identity = resolve_leg_identities(
-        front_left, front_right, scale=torso_scale
+        front_left,
+        front_right,
+        scale=torso_scale,
+        anchor_frame=anchor_frame,
+        anchor_state=front_anchor_state,
     )
-    rear_identity = resolve_leg_identities(rear_left, rear_right, scale=torso_scale)
+    rear_identity = resolve_leg_identities(
+        rear_left,
+        rear_right,
+        scale=torso_scale,
+        anchor_frame=anchor_frame,
+        anchor_state=rear_anchor_state,
+    )
     front_fallback_offset, front_fallback_report = _calibrate_fallback_offset(
         back_base,
         neck_end,
@@ -722,7 +738,7 @@ def build_semantic_mapping(
     }
     trajectory = {
         "schema": "qianji.keypoint_trajectory_2d",
-        "schema_version": "1.1.0",
+        "schema_version": "1.2.0",
         "coordinate_system": "image_pixels_top_left_origin_x_right_y_down",
         "video": {
             "width": video.width,
@@ -735,7 +751,7 @@ def build_semantic_mapping(
     }
     report = {
         "schema": "qianji.keypoint_mapping_report",
-        "schema_version": "1.1.0",
+        "schema_version": "1.2.0",
         "scorer": scorer,
         "individual": individual,
         "confidence_threshold": confidence_threshold,
@@ -755,6 +771,9 @@ def build_semantic_mapping(
         },
         "keypoints": point_report,
     }
+    if identity_anchor is not None:
+        trajectory["identity_anchor"] = dict(identity_anchor)
+        report["identity_anchor"] = dict(identity_anchor)
     return MappingResult(trajectory=trajectory, report=report)
 
 

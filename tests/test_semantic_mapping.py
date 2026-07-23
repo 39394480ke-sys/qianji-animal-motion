@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from qianji_animal_motion.semantic_mapping import (
     REQUIRED_BODYPARTS,
     VideoInfo,
     build_semantic_mapping,
+    resolve_leg_identities,
     write_json_outputs,
 )
 from qianji_animal_motion.semantic_cli import run_mapping
@@ -69,6 +71,90 @@ def _swap_pair(frame: pd.DataFrame, index: int, prefix: str) -> None:
 
 def _video_info(frame_count: int = 4) -> VideoInfo:
     return VideoInfo(width=120, height=100, fps=20.0, frame_count=frame_count)
+
+
+def _write_anchor_manifest(
+    path: Path,
+    *,
+    video: Path,
+    predictions: Path,
+    frame_idx: int = 0,
+) -> None:
+    payload = {
+        "schema": "qianji.identity_anchor_candidates",
+        "schema_version": "1.0.0",
+        "video": {
+            "sha256": hashlib.sha256(video.read_bytes()).hexdigest(),
+            "width": 120,
+            "height": 100,
+            "fps": 20.0,
+            "frame_count": 4,
+        },
+        "predictions": {
+            "sha256": hashlib.sha256(predictions.read_bytes()).hexdigest(),
+            "individual": "animal0",
+        },
+        "candidates": [
+            {
+                "frame_idx": frame_idx,
+                "timestamp_s": frame_idx / 20.0,
+                "score": 1.0,
+                "minimum_confidence": 0.9,
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _leg_at(x: float, confidence: float = 0.9) -> np.ndarray:
+    return np.asarray(
+        [
+            [x, 20.0, confidence],
+            [x, 50.0, confidence],
+            [x, 80.0, confidence],
+        ],
+        dtype=float,
+    )
+
+
+def test_anchor_tracks_identities_both_directions_across_full_occlusion() -> None:
+    physical_left = [_leg_at(float(index)) for index in range(7)]
+    physical_right = [_leg_at(float(index + 20)) for index in range(7)]
+    hidden_left = _leg_at(0.0, confidence=0.0)
+    hidden_right = _leg_at(0.0, confidence=0.0)
+    left = np.stack(
+        [
+            physical_right[0],
+            physical_right[1],
+            hidden_left,
+            physical_left[3],
+            physical_left[4],
+            hidden_left,
+            physical_right[6],
+        ]
+    )
+    right = np.stack(
+        [
+            physical_left[0],
+            physical_left[1],
+            hidden_right,
+            physical_right[3],
+            physical_right[4],
+            hidden_right,
+            physical_left[6],
+        ]
+    )
+
+    identity = resolve_leg_identities(
+        left,
+        right,
+        scale=20.0,
+        anchor_frame=3,
+        anchor_state=0,
+    )
+
+    assert identity.states.tolist() == [1, 1, 0, 0, 0, 0, 1]
+    assert identity.ambiguous.tolist() == [False, False, True, False, False, True, False]
 
 
 def test_maps_dorsal_landmarks_directly_to_spine_points() -> None:
@@ -169,6 +255,21 @@ def test_corrects_a_single_frame_left_right_swap() -> None:
     assert result.report["identity_corrections"]["rear"] == [2]
 
 
+def test_front_and_rear_anchor_assignments_are_independent() -> None:
+    result = build_semantic_mapping(
+        _prediction_dataframe(),
+        _video_info(),
+        anchor_frame=0,
+        front_anchor_state=0,
+        rear_anchor_state=1,
+    )
+
+    points = result.trajectory["frames"][0]["keypoints"]
+    assert points["front_left_foot"]["x_px"] == pytest.approx(70.0)
+    assert points["rear_left_foot"]["x_px"] == pytest.approx(40.0)
+    assert points["rear_left_foot"]["identity_corrected"] is True
+
+
 def test_ambiguous_identity_is_null_and_flagged() -> None:
     predictions = _prediction_dataframe()
     scorer = "test_model"
@@ -188,6 +289,29 @@ def test_ambiguous_identity_is_null_and_flagged() -> None:
     assert point["y_px"] is None
     assert point["valid"] is False
     assert "identity_ambiguous" in point["flags"]
+
+
+def test_observed_ambiguous_crossing_does_not_flip_later_identity() -> None:
+    def leg_sequence(x_positions: list[float]) -> np.ndarray:
+        sequence = np.zeros((len(x_positions), 3, 3), dtype=float)
+        sequence[:, :, 2] = 1.0
+        for frame, x_position in enumerate(x_positions):
+            sequence[frame, :, 0] = x_position
+        return sequence
+
+    left = leg_sequence([0.0, 4.9, 5.25, 5.5])
+    right = leg_sequence([10.0, 5.1, 4.75, 4.5])
+
+    resolution = resolve_leg_identities(
+        left,
+        right,
+        scale=10.0,
+        anchor_frame=0,
+        anchor_state=0,
+    )
+
+    assert resolution.ambiguous.tolist() == [False, True, False, False]
+    assert resolution.states.tolist() == [0, 0, 0, 0]
 
 
 def test_low_confidence_point_is_null_without_interpolation() -> None:
@@ -268,8 +392,22 @@ def test_run_mapping_creates_json_report_and_preview(tmp_path: Path) -> None:
     )
     original_predictions = predictions_path.read_bytes()
     output_dir = tmp_path / "outputs"
+    anchor_manifest = tmp_path / "identity_anchor_candidates.json"
+    _write_anchor_manifest(
+        anchor_manifest,
+        video=video_path,
+        predictions=predictions_path,
+    )
 
-    outputs = run_mapping(video_path, predictions_path, output_dir)
+    outputs = run_mapping(
+        video_path,
+        predictions_path,
+        output_dir,
+        anchor_manifest=anchor_manifest,
+        anchor_frame=0,
+        front_anchor="keep",
+        rear_anchor="keep",
+    )
 
     assert outputs.trajectory.name == "keypoint_trajectory_2d.json"
     assert outputs.report.name == "mapping_report.json"
@@ -280,6 +418,62 @@ def test_run_mapping_creates_json_report_and_preview(tmp_path: Path) -> None:
     assert capture.get(cv2.CAP_PROP_FPS) == pytest.approx(20.0)
     capture.release()
     assert predictions_path.read_bytes() == original_predictions
+    trajectory = json.loads(outputs.trajectory.read_text(encoding="utf-8"))
+    assert trajectory["identity_anchor"]["frame_idx"] == 0
+    assert trajectory["identity_anchor"]["front_assignment"] == "keep"
+    assert trajectory["identity_anchor"]["rear_assignment"] == "keep"
+
+
+def test_run_mapping_requires_a_manual_anchor(tmp_path: Path) -> None:
+    video = tmp_path / "video.mp4"
+    predictions = tmp_path / "predictions.h5"
+    video.write_bytes(b"video")
+    predictions.write_bytes(b"predictions")
+
+    with pytest.raises(ValueError, match="anchor manifest"):
+        run_mapping(video, predictions, tmp_path / "outputs")
+
+
+def test_run_mapping_rejects_anchor_manifest_for_another_video(
+    tmp_path: Path,
+) -> None:
+    video_path = tmp_path / "video.mp4"
+    writer = cv2.VideoWriter(
+        str(video_path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        20.0,
+        (120, 100),
+    )
+    assert writer.isOpened()
+    for _ in range(4):
+        writer.write(np.full((100, 120, 3), 240, dtype=np.uint8))
+    writer.release()
+    predictions_path = tmp_path / "predictions.h5"
+    _prediction_dataframe().to_hdf(
+        predictions_path,
+        key="df_with_missing",
+        mode="w",
+    )
+    manifest = tmp_path / "identity_anchor_candidates.json"
+    _write_anchor_manifest(
+        manifest,
+        video=video_path,
+        predictions=predictions_path,
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["video"]["sha256"] = "0" * 64
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="video hash"):
+        run_mapping(
+            video_path,
+            predictions_path,
+            tmp_path / "outputs",
+            anchor_manifest=manifest,
+            anchor_frame=0,
+            front_anchor="keep",
+            rear_anchor="keep",
+        )
 
 
 def test_run_mapping_refuses_to_overwrite_existing_outputs(tmp_path: Path) -> None:

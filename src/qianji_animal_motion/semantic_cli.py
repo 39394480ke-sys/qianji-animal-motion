@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Sequence
@@ -164,6 +165,65 @@ def render_preview(
         )
 
 
+def _load_identity_anchor(
+    manifest_path: Path,
+    *,
+    video_hash: str,
+    predictions_hash: str,
+    video: VideoInfo,
+    individual: str,
+    anchor_frame: int,
+    front_anchor: str,
+    rear_anchor: str,
+) -> dict:
+    if front_anchor not in {"keep", "swap"} or rear_anchor not in {"keep", "swap"}:
+        raise ValueError("front and rear anchor assignments must be keep or swap")
+    manifest_path = Path(manifest_path).expanduser().resolve()
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"anchor manifest does not exist: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema") != "qianji.identity_anchor_candidates":
+        raise ValueError("unsupported anchor manifest schema")
+
+    manifest_video = manifest.get("video", {})
+    manifest_predictions = manifest.get("predictions", {})
+    if manifest_video.get("sha256") != video_hash:
+        raise ValueError("anchor manifest video hash does not match the input video")
+    if manifest_predictions.get("sha256") != predictions_hash:
+        raise ValueError(
+            "anchor manifest predictions hash does not match the input H5"
+        )
+    if manifest_predictions.get("individual") != individual:
+        raise ValueError("anchor manifest individual does not match the requested individual")
+    if (
+        manifest_video.get("width") != video.width
+        or manifest_video.get("height") != video.height
+        or manifest_video.get("frame_count") != video.frame_count
+        or abs(float(manifest_video.get("fps", 0.0)) - video.fps) > 0.01
+    ):
+        raise ValueError("anchor manifest video metadata does not match the input video")
+
+    candidates = {
+        int(candidate["frame_idx"]): candidate
+        for candidate in manifest.get("candidates", [])
+    }
+    if anchor_frame not in candidates:
+        raise ValueError("anchor frame is not present in the candidate manifest")
+    candidate = candidates[anchor_frame]
+    return {
+        "frame_idx": anchor_frame,
+        "timestamp_s": anchor_frame / video.fps,
+        "front_assignment": front_anchor,
+        "rear_assignment": rear_anchor,
+        "confirmed_by": "manual",
+        "candidate_score": candidate.get("score"),
+        "minimum_confidence": candidate.get("minimum_confidence"),
+        "manifest_path": str(manifest_path),
+        "video_sha256": video_hash,
+        "predictions_sha256": predictions_hash,
+    }
+
+
 def run_mapping(
     video_path: Path,
     predictions_path: Path,
@@ -171,6 +231,10 @@ def run_mapping(
     *,
     individual: str = "animal0",
     confidence_threshold: float = 0.5,
+    anchor_manifest: Path | None = None,
+    anchor_frame: int | None = None,
+    front_anchor: str | None = None,
+    rear_anchor: str | None = None,
     overwrite: bool = False,
 ) -> OutputPaths:
     video_path = Path(video_path).expanduser().resolve()
@@ -192,17 +256,38 @@ def run_mapping(
         raise FileNotFoundError(
             f"DeepLabCut predictions do not exist: {predictions_path}"
         )
+    if anchor_manifest is None:
+        raise ValueError("anchor manifest is required for six-point mapping")
+    if anchor_frame is None:
+        raise ValueError("anchor frame is required for six-point mapping")
+    if front_anchor is None or rear_anchor is None:
+        raise ValueError("front and rear anchor assignments are required")
     if not 0 <= confidence_threshold <= 1:
         raise ValueError("confidence threshold must be between 0 and 1")
 
     before_hash = _file_sha256(predictions_path)
+    video_hash = _file_sha256(video_path)
     video = probe_video(video_path)
+    identity_anchor = _load_identity_anchor(
+        anchor_manifest,
+        video_hash=video_hash,
+        predictions_hash=before_hash,
+        video=video,
+        individual=individual,
+        anchor_frame=anchor_frame,
+        front_anchor=front_anchor,
+        rear_anchor=rear_anchor,
+    )
     predictions = pd.read_hdf(predictions_path)
     result = build_semantic_mapping(
         predictions,
         video,
         individual=individual,
         confidence_threshold=confidence_threshold,
+        anchor_frame=anchor_frame,
+        front_anchor_state=int(front_anchor == "swap"),
+        rear_anchor_state=int(rear_anchor == "swap"),
+        identity_anchor=identity_anchor,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     trajectory_path, report_path = write_json_outputs(
@@ -231,6 +316,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--individual", default="animal0")
     parser.add_argument("--confidence-threshold", type=float, default=0.5)
+    parser.add_argument("--anchor-manifest", type=Path, required=True)
+    parser.add_argument("--anchor-frame", type=int, required=True)
+    parser.add_argument("--front-anchor", choices=("keep", "swap"), required=True)
+    parser.add_argument("--rear-anchor", choices=("keep", "swap"), required=True)
     parser.add_argument("--overwrite", action="store_true")
     return parser
 
@@ -243,6 +332,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.output,
         individual=args.individual,
         confidence_threshold=args.confidence_threshold,
+        anchor_manifest=args.anchor_manifest,
+        anchor_frame=args.anchor_frame,
+        front_anchor=args.front_anchor,
+        rear_anchor=args.rear_anchor,
         overwrite=args.overwrite,
     )
     print(f"trajectory: {outputs.trajectory}")

@@ -21,6 +21,7 @@ dev = [
 ]
 
 [project.scripts]
+qianji-suggest-anchor = "qianji_animal_motion.anchor_selection:main"
 qianji-map-keypoints = "qianji_animal_motion.semantic_cli:main"
 
 [tool.pytest.ini_options]
