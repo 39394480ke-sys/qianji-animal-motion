@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -11,7 +12,10 @@ import subprocess
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Sequence
+
+from qianji_animal_motion.artifact_io import publish_staged_files
 
 
 @dataclass(frozen=True)
@@ -77,25 +81,72 @@ def probe_glb(path: Path) -> MeshMetadata:
     minima: list[list[float]] = []
     maxima: list[list[float]] = []
 
-    for mesh in meshes:
-        for primitive in mesh.get("primitives", []):
+    for mesh_index, mesh in enumerate(meshes):
+        for primitive_index, primitive in enumerate(mesh.get("primitives", [])):
+            context = f"mesh {mesh_index} primitive {primitive_index}"
             primitive_count += 1
             position_index = primitive.get("attributes", {}).get("POSITION")
-            if not isinstance(position_index, int) or not 0 <= position_index < len(accessors):
-                continue
-            positions = accessors[position_index]
-            positions_count = int(positions.get("count", 0))
-            vertex_count += positions_count
-            if len(positions.get("min", [])) == 3 and len(positions.get("max", [])) == 3:
-                minima.append([float(value) for value in positions["min"]])
-                maxima.append([float(value) for value in positions["max"]])
-
+            if (
+                not isinstance(position_index, int)
+                or not 0 <= position_index < len(accessors)
+            ):
+                raise ValueError(
+                    f"invalid GLB mesh: {context} has no valid POSITION accessor"
+                )
             if int(primitive.get("mode", 4)) != 4:
-                continue
+                raise ValueError(
+                    f"invalid GLB mesh: {context} is not a triangle primitive"
+                )
+            positions = accessors[position_index]
+            if positions.get("type") != "VEC3":
+                raise ValueError(
+                    f"invalid GLB mesh: {context} POSITION accessor must be VEC3"
+                )
+            positions_count = int(positions.get("count", 0))
+            if positions_count < 3:
+                raise ValueError(
+                    f"invalid GLB mesh: {context} has fewer than three vertices"
+                )
+            vertex_count += positions_count
+            minimum = positions.get("min", [])
+            maximum = positions.get("max", [])
+            if len(minimum) != 3 or len(maximum) != 3:
+                raise ValueError(
+                    f"invalid GLB mesh: {context} POSITION bounds are required"
+                )
+            minimum = [float(value) for value in minimum]
+            maximum = [float(value) for value in maximum]
+            if not all(math.isfinite(value) for value in minimum + maximum):
+                raise ValueError(
+                    f"invalid GLB mesh: {context} POSITION bounds must be finite"
+                )
+            if any(low > high for low, high in zip(minimum, maximum, strict=True)):
+                raise ValueError(
+                    f"invalid GLB mesh: {context} POSITION bounds are reversed"
+                )
+            minima.append(minimum)
+            maxima.append(maximum)
+
             indices_index = primitive.get("indices")
-            if isinstance(indices_index, int) and 0 <= indices_index < len(accessors):
-                face_count += int(accessors[indices_index].get("count", 0)) // 3
+            if indices_index is not None:
+                if (
+                    not isinstance(indices_index, int)
+                    or not 0 <= indices_index < len(accessors)
+                ):
+                    raise ValueError(
+                        f"invalid GLB mesh: {context} has an invalid index accessor"
+                    )
+                index_count = int(accessors[indices_index].get("count", 0))
+                if index_count < 3 or index_count % 3:
+                    raise ValueError(
+                        f"invalid GLB mesh: {context} index count is not triangles"
+                    )
+                face_count += index_count // 3
             else:
+                if positions_count % 3:
+                    raise ValueError(
+                        f"invalid GLB mesh: {context} vertex count is not triangles"
+                    )
                 face_count += positions_count // 3
 
     bounds_min = [min(values) for values in zip(*minima)] if minima else []
@@ -124,6 +175,8 @@ def validate_mesh_metadata(metadata: MeshMetadata) -> list[str]:
     errors: list[str] = []
     if metadata.meshes < 1:
         errors.append("at least one mesh is required")
+    if metadata.nodes < 1:
+        errors.append("at least one node is required")
     if metadata.primitives < 1:
         errors.append("at least one mesh primitive is required")
     if metadata.vertices < 3:
@@ -164,6 +217,14 @@ def _temporary_output_path(output_path: Path) -> Path:
     )
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def convert_mesh(
     input_path: Path,
     output_path: Path,
@@ -182,55 +243,74 @@ def convert_mesh(
         raise ValueError(f"output must use the .glb extension: {output_path}")
     if input_path == output_path:
         raise ValueError("input and output paths must be different")
-    if output_path.exists() and not overwrite:
+    sidecar = output_path.with_suffix(".metadata.json")
+    existing = [path for path in (output_path, sidecar) if path.exists()]
+    if existing and not overwrite:
         raise FileExistsError(
-            f"output already exists: {output_path}; use --overwrite to replace it"
+            f"output already exists: {existing[0]}; use --overwrite to replace it"
         )
 
+    input_hash = _sha256(input_path)
     version = assimp_version(assimp)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = _temporary_output_path(output_path)
-    command = build_assimp_command(input_path, temporary_path, assimp=assimp)
-    try:
-        subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        metadata = probe_glb(temporary_path)
-        temporary_path.replace(output_path)
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            "Assimp was not found; install it with `brew install assimp`"
-        ) from exc
-    except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.strip() or exc.stdout.strip() or "unknown error"
-        raise RuntimeError(f"Assimp conversion failed: {detail}") from exc
-    finally:
-        temporary_path.unlink(missing_ok=True)
+    with TemporaryDirectory(
+        prefix=f".{output_path.stem}.staging-",
+        dir=output_path.parent,
+    ) as staging_name:
+        staging_dir = Path(staging_name)
+        staged_output = staging_dir / output_path.name
+        staged_sidecar = staging_dir / sidecar.name
+        temporary_path = _temporary_output_path(staged_output)
+        command = build_assimp_command(input_path, temporary_path, assimp=assimp)
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            metadata = probe_glb(temporary_path)
+            temporary_path.replace(staged_output)
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "Assimp was not found; install it with `brew install assimp`"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            detail = exc.stderr.strip() or exc.stdout.strip() or "unknown error"
+            raise RuntimeError(f"Assimp conversion failed: {detail}") from exc
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
-    sidecar = output_path.with_suffix(".metadata.json")
-    sidecar.write_text(
-        json.dumps(
-            {
-                "schema": "qianji.mesh_convert",
-                "schema_version": "1.0.0",
-                "input_path": str(input_path),
-                "output_path": str(output_path),
-                "converter": {"name": "assimp", "version": version},
-                "input": {
-                    "format": "fbx",
-                    "size_bytes": input_path.stat().st_size,
+        staged_sidecar.write_text(
+            json.dumps(
+                {
+                    "schema": "qianji.mesh_convert",
+                    "schema_version": "1.0.0",
+                    "input_path": str(input_path),
+                    "output_path": str(output_path),
+                    "converter": {"name": "assimp", "version": version},
+                    "input": {
+                        "format": "fbx",
+                        "size_bytes": input_path.stat().st_size,
+                        "sha256": input_hash,
+                    },
+                    "output": asdict(metadata),
                 },
-                "output": asdict(metadata),
-            },
-            ensure_ascii=True,
-            indent=2,
+                ensure_ascii=True,
+                indent=2,
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        + "\n",
-        encoding="utf-8",
-    )
+        if _sha256(input_path) != input_hash:
+            raise RuntimeError("source FBX changed during conversion")
+        publish_staged_files(
+            (staged_output, staged_sidecar),
+            (output_path, sidecar),
+            overwrite=overwrite,
+            conflict_hint="use --overwrite to replace it",
+        )
     return metadata
 
 

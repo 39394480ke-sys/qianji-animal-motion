@@ -4,6 +4,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
+import pytest
 
 from qianji_animal_motion.anchor_selection import (
     rank_anchor_candidates,
@@ -119,6 +120,7 @@ def test_suggestion_package_writes_contact_sheet_and_hashed_manifest(
         video_path=video,
         predictions_path=predictions,
         output_dir=output,
+        camera_side="animal_left_visible",
         count=4,
         min_spacing_frames=2,
     )
@@ -131,3 +133,75 @@ def test_suggestion_package_writes_contact_sheet_and_hashed_manifest(
     assert len(manifest["video"]["sha256"]) == 64
     assert len(manifest["predictions"]["sha256"]) == 64
     assert len(manifest["candidates"]) == 4
+    assert manifest["settings"]["camera_side"] == "animal_left_visible"
+
+
+def test_suggestion_package_discards_partial_contact_sheet_on_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video = tmp_path / "video.mp4"
+    predictions = tmp_path / "predictions.h5"
+    output = tmp_path / "anchor_review"
+    _write_video(video)
+    _predictions().to_hdf(predictions, key="df_with_missing", mode="w")
+
+    def fail_render(
+        _video: Path,
+        _candidates: list[dict],
+        _legs: tuple[np.ndarray, ...],
+        output_path: Path,
+    ) -> None:
+        output_path.write_bytes(b"partial")
+        raise RuntimeError("contact sheet failed")
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.anchor_selection.render_contact_sheet",
+        fail_render,
+    )
+
+    with pytest.raises(RuntimeError, match="contact sheet failed"):
+        suggest_anchor_candidates(
+            video_path=video,
+            predictions_path=predictions,
+            output_dir=output,
+            camera_side="unknown",
+        )
+
+    assert not output.exists()
+    assert not list(tmp_path.glob(".anchor_review.staging-*"))
+
+
+def test_suggestion_package_rejects_source_changes_during_render(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video = tmp_path / "video.mp4"
+    predictions = tmp_path / "predictions.h5"
+    output = tmp_path / "anchor_review"
+    _write_video(video)
+    _predictions().to_hdf(predictions, key="df_with_missing", mode="w")
+
+    def mutate_video(
+        _video: Path,
+        _candidates: list[dict],
+        _legs: tuple[np.ndarray, ...],
+        output_path: Path,
+    ) -> None:
+        output_path.write_bytes(b"contact sheet")
+        video.write_bytes(b"changed during render")
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.anchor_selection.render_contact_sheet",
+        mutate_video,
+    )
+
+    with pytest.raises(RuntimeError, match="source video changed"):
+        suggest_anchor_candidates(
+            video_path=video,
+            predictions_path=predictions,
+            output_dir=output,
+            camera_side="unknown",
+        )
+
+    assert not output.exists()

@@ -1,6 +1,5 @@
 import json
 import shutil
-import stat
 import subprocess
 from pathlib import Path
 
@@ -62,6 +61,20 @@ def test_validate_metadata_reports_nonconforming_fields() -> None:
     ]
 
 
+def test_validate_metadata_rejects_nonpositive_width() -> None:
+    metadata = VideoMetadata(
+        codec="h264",
+        width=0,
+        height=720,
+        fps=30.0,
+        pixel_format="yuv420p",
+        duration_s=1.0,
+        has_audio=False,
+    )
+
+    assert validate_metadata(metadata) == ["width must be positive, got 0"]
+
+
 @pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
     reason="FFmpeg tools are required for the integration test",
@@ -101,8 +114,103 @@ def test_preprocess_video_normalizes_real_video(tmp_path: Path) -> None:
     assert result.fps == pytest.approx(30.0)
     assert result.pixel_format == "yuv420p"
     assert result.has_audio is False
-    assert output.stat().st_flags & stat.UF_HIDDEN == 0
+    assert not output.name.startswith(".")
     sidecar = output.with_suffix(".metadata.json")
     payload = json.loads(sidecar.read_text(encoding="utf-8"))
     assert payload["settings"]["fps"] == 30
     assert payload["output"]["height"] == 720
+
+
+def test_preprocess_video_requires_mp4_output(tmp_path: Path) -> None:
+    source = tmp_path / "source.mov"
+    source.write_bytes(b"video")
+
+    with pytest.raises(ValueError, match=r"\.mp4"):
+        preprocess_video(source, tmp_path / "processed.avi")
+
+
+def test_preprocess_video_reports_ffmpeg_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mov"
+    source.write_bytes(b"video")
+    output = tmp_path / "processed.mp4"
+    metadata = VideoMetadata(
+        codec="h264",
+        width=960,
+        height=720,
+        fps=30.0,
+        pixel_format="yuv420p",
+        duration_s=1.0,
+        has_audio=False,
+    )
+    monkeypatch.setattr(
+        "qianji_animal_motion.preprocess.probe_video",
+        lambda *_args, **_kwargs: metadata,
+    )
+
+    def fail_ffmpeg(command: list[str], **_kwargs: object) -> None:
+        raise subprocess.CalledProcessError(
+            1,
+            command,
+            stderr="encoder failed",
+        )
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.preprocess.subprocess.run",
+        fail_ffmpeg,
+    )
+
+    with pytest.raises(RuntimeError, match="FFmpeg conversion failed: encoder failed"):
+        preprocess_video(source, output)
+
+    assert not output.exists()
+
+
+def test_preprocess_video_preserves_existing_pair_when_sidecar_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mov"
+    source.write_bytes(b"video")
+    output = tmp_path / "processed.mp4"
+    sidecar = output.with_suffix(".metadata.json")
+    output.write_bytes(b"old video")
+    sidecar.write_bytes(b"old metadata")
+    metadata = VideoMetadata(
+        codec="h264",
+        width=960,
+        height=720,
+        fps=30.0,
+        pixel_format="yuv420p",
+        duration_s=1.0,
+        has_audio=False,
+    )
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.preprocess.probe_video",
+        lambda *_args, **_kwargs: metadata,
+    )
+
+    def fake_run(command: list[str], **_kwargs: object) -> None:
+        Path(command[-1]).write_bytes(b"new video")
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.preprocess.subprocess.run",
+        fake_run,
+    )
+    original_write_text = Path.write_text
+
+    def fail_sidecar(path: Path, *args: object, **kwargs: object) -> int:
+        if path.name == sidecar.name:
+            raise OSError("sidecar write failed")
+        return original_write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_sidecar)
+
+    with pytest.raises(OSError, match="sidecar write failed"):
+        preprocess_video(source, output, overwrite=True)
+
+    assert output.read_bytes() == b"old video"
+    assert sidecar.read_bytes() == b"old metadata"

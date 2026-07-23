@@ -1,24 +1,37 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "qianji-animal-motion"
-version = "0.1.0"
-description = "Animal mesh and video-motion input tools for the QianJi biomimetic project."
+version = "0.2.0"
+description = "Traceable animal mesh and 2D keypoint preparation tools for QianJi."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    {name = "KeW"},
+]
 dependencies = [
-    "deeplabcut[modelzoo]==3.0.0",
+    "numpy>=1.26,<2",
+    "opencv-python>=4.10,<5",
+    "pandas>=2.2,<3",
+    "tables>=3.10,<4",
 ]
 
 [project.optional-dependencies]
+dlc = [
+    "deeplabcut[modelzoo]==3.0.0",
+]
 gui = [
     "deeplabcut[gui]==3.0.0",
 ]
 dev = [
     "pytest>=8,<9",
 ]
+
+[project.urls]
+Repository = "https://github.com/39394480ke-sys/qianji-animal-motion"
 
 [project.scripts]
 qianji-convert-mesh = "qianji_animal_motion.mesh_convert:main"

@@ -117,6 +117,7 @@ def _write_anchor_manifest(
             "sha256": hashlib.sha256(predictions.read_bytes()).hexdigest(),
             "individual": "animal0",
         },
+        "settings": {"camera_side": "animal_left_visible"},
         "candidates": [
             {
                 "frame_idx": frame_idx,
@@ -507,6 +508,8 @@ def test_rejects_paw_that_is_not_distal_to_its_knee() -> None:
 
 def test_writes_json_outputs_without_modifying_source(tmp_path: Path) -> None:
     source = tmp_path / "predictions.h5"
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video fixture")
     predictions = _prediction_dataframe()
     predictions.loc[
         2,
@@ -520,7 +523,7 @@ def test_writes_json_outputs_without_modifying_source(tmp_path: Path) -> None:
         result,
         output_dir=tmp_path / "semantic",
         source_h5=source,
-        source_video=tmp_path / "video.mp4",
+        source_video=video,
     )
 
     payload = json.loads(trajectory_path.read_text(encoding="utf-8"))
@@ -532,6 +535,7 @@ def test_writes_json_outputs_without_modifying_source(tmp_path: Path) -> None:
     assert payload["schema"] == "qianji.keypoint_trajectory_2d"
     assert payload["video"]["frame_count"] == 4
     assert payload["frames"][2]["keypoints"]["front_left_foot"]["confidence"] is None
+    assert len(payload["source"]["video_sha256"]) == 64
     assert report["schema"] == "qianji.keypoint_mapping_report"
     assert source.read_bytes() == before
 
@@ -541,6 +545,8 @@ def test_json_outputs_are_serialized_before_either_file_is_written(
 ) -> None:
     source = tmp_path / "predictions.h5"
     source.write_bytes(b"h5 fixture")
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video fixture")
     result = build_semantic_mapping(_prediction_dataframe(), _video_info())
     result.report["unexpected_non_finite"] = np.nan
     output_dir = tmp_path / "semantic"
@@ -550,7 +556,7 @@ def test_json_outputs_are_serialized_before_either_file_is_written(
             result,
             output_dir=output_dir,
             source_h5=source,
-            source_video=tmp_path / "video.mp4",
+            source_video=video,
         )
 
     assert not (output_dir / "keypoint_trajectory_2d.json").exists()
@@ -607,6 +613,7 @@ def test_run_mapping_creates_json_report_and_preview(tmp_path: Path) -> None:
     assert trajectory["identity_anchor"]["frame_idx"] == 0
     assert trajectory["identity_anchor"]["front_assignment"] == "keep"
     assert trajectory["identity_anchor"]["rear_assignment"] == "keep"
+    assert trajectory["identity_anchor"]["camera_side"] == "animal_left_visible"
 
 
 def test_run_mapping_discards_staged_outputs_when_preview_fails(
@@ -697,6 +704,37 @@ def test_run_mapping_discards_outputs_when_source_video_changes(
     )
 
     with pytest.raises(RuntimeError, match="source video changed"):
+        run_mapping(
+            video,
+            predictions,
+            output_dir,
+            anchor_manifest=anchor_manifest,
+            anchor_frame=0,
+            front_anchor="keep",
+            rear_anchor="keep",
+        )
+
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(".outputs.staging-*"))
+
+
+def test_run_mapping_discards_outputs_when_anchor_manifest_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video, predictions, anchor_manifest = _mapping_inputs(tmp_path)
+    output_dir = tmp_path / "outputs"
+
+    def mutate_manifest(_video: Path, _result: object, output: Path) -> None:
+        anchor_manifest.write_text('{"changed": true}', encoding="utf-8")
+        output.write_bytes(b"preview")
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.semantic_cli.render_preview",
+        mutate_manifest,
+    )
+
+    with pytest.raises(RuntimeError, match="anchor manifest changed"):
         run_mapping(
             video,
             predictions,

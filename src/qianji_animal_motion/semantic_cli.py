@@ -13,6 +13,7 @@ from typing import Iterator, Sequence
 import cv2
 import pandas as pd
 
+from qianji_animal_motion.artifact_io import publish_staged_files
 from qianji_animal_motion.semantic_mapping import (
     MappingResult,
     VideoInfo,
@@ -37,54 +38,12 @@ def _publish_staged_outputs(
     *,
     overwrite: bool,
 ) -> None:
-    staged_paths = tuple(staged)
-    final_paths = tuple(final)
-    missing = [path for path in staged_paths if not path.is_file()]
-    if missing:
-        raise RuntimeError(f"staged output is missing: {missing[0]}")
-    existing = [path for path in final_paths if path.exists()]
-    if existing and not overwrite:
-        raise FileExistsError(
-            f"output already exists: {existing[0]}; use --overwrite to replace it"
-        )
-
-    final.trajectory.parent.mkdir(parents=True, exist_ok=True)
-    backup_dir = staged.trajectory.parent / ".backup"
-    backup_dir.mkdir()
-    backups: list[tuple[Path, Path]] = []
-    published: list[tuple[Path, Path]] = []
-    try:
-        for final_path in final_paths:
-            if final_path.exists():
-                backup_path = backup_dir / final_path.name
-                final_path.replace(backup_path)
-                backups.append((backup_path, final_path))
-        for staged_path, final_path in zip(
-            staged_paths,
-            final_paths,
-            strict=True,
-        ):
-            staged_path.replace(final_path)
-            published.append((final_path, staged_path))
-    except Exception as exc:
-        rollback_errors: list[OSError] = []
-        for final_path, staged_path in reversed(published):
-            if final_path.exists():
-                try:
-                    final_path.replace(staged_path)
-                except OSError as rollback_error:
-                    rollback_errors.append(rollback_error)
-        for backup_path, final_path in reversed(backups):
-            if backup_path.exists():
-                try:
-                    backup_path.replace(final_path)
-                except OSError as rollback_error:
-                    rollback_errors.append(rollback_error)
-        if rollback_errors:
-            raise RuntimeError(
-                "output publishing failed and rollback was incomplete"
-            ) from exc
-        raise
+    publish_staged_files(
+        tuple(staged),
+        tuple(final),
+        overwrite=overwrite,
+        conflict_hint="use --overwrite to replace it",
+    )
 
 
 _COLORS = {
@@ -225,6 +184,7 @@ def render_preview(
 def _load_identity_anchor(
     manifest_path: Path,
     *,
+    manifest_hash: str,
     video_hash: str,
     predictions_hash: str,
     video: VideoInfo,
@@ -267,6 +227,16 @@ def _load_identity_anchor(
     if anchor_frame not in candidates:
         raise ValueError("anchor frame is not present in the candidate manifest")
     candidate = candidates[anchor_frame]
+    camera_side = manifest.get("settings", {}).get("camera_side")
+    if camera_side not in {
+        "animal_left_visible",
+        "animal_right_visible",
+        "unknown",
+    }:
+        raise ValueError(
+            "anchor manifest does not record camera_side; regenerate the "
+            "anchor candidates"
+        )
     return {
         "frame_idx": anchor_frame,
         "timestamp_s": anchor_frame / video.fps,
@@ -275,7 +245,9 @@ def _load_identity_anchor(
         "confirmed_by": "manual",
         "candidate_score": candidate.get("score"),
         "minimum_confidence": candidate.get("minimum_confidence"),
+        "camera_side": camera_side,
         "manifest_path": str(manifest_path),
+        "manifest_sha256": manifest_hash,
         "video_sha256": video_hash,
         "predictions_sha256": predictions_hash,
     }
@@ -322,11 +294,18 @@ def run_mapping(
     if not 0 <= confidence_threshold <= 1:
         raise ValueError("confidence threshold must be between 0 and 1")
 
+    anchor_manifest_path = Path(anchor_manifest).expanduser().resolve()
+    if not anchor_manifest_path.is_file():
+        raise FileNotFoundError(
+            f"anchor manifest does not exist: {anchor_manifest_path}"
+        )
+    anchor_manifest_hash = _file_sha256(anchor_manifest_path)
     before_hash = _file_sha256(predictions_path)
     video_hash = _file_sha256(video_path)
     video = probe_video(video_path)
     identity_anchor = _load_identity_anchor(
-        anchor_manifest,
+        anchor_manifest_path,
+        manifest_hash=anchor_manifest_hash,
         video_hash=video_hash,
         predictions_hash=before_hash,
         video=video,
@@ -372,6 +351,8 @@ def run_mapping(
             )
         if video_hash != _file_sha256(video_path):
             raise RuntimeError("source video changed during mapping")
+        if anchor_manifest_hash != _file_sha256(anchor_manifest_path):
+            raise RuntimeError("anchor manifest changed during mapping")
         _publish_staged_outputs(
             staged_outputs,
             outputs,

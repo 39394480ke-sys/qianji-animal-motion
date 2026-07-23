@@ -14,6 +14,7 @@ from tempfile import TemporaryDirectory
 from typing import Sequence
 import xml.etree.ElementTree as ET
 
+from qianji_animal_motion.artifact_io import publish_staged_files
 from qianji_animal_motion.semantic_cli import probe_video, render_preview
 from qianji_animal_motion.semantic_mapping import MappingResult
 
@@ -76,38 +77,17 @@ def _publish_staged_import_outputs(
 ) -> None:
     staged_paths = _import_output_paths(staged)
     final_paths = _import_output_paths(final)
-    missing = [path for path in staged_paths if not path.is_file()]
-    if missing:
-        raise RuntimeError(f"staged output is missing: {missing[0]}")
     output_dir = final.trajectory.parent
     _ensure_output_available(
         output_dir,
         [path.name for path in final_paths],
     )
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    published: list[tuple[Path, Path]] = []
-    try:
-        for staged_path, final_path in zip(
-            staged_paths,
-            final_paths,
-            strict=True,
-        ):
-            staged_path.replace(final_path)
-            published.append((final_path, staged_path))
-    except Exception as exc:
-        rollback_errors: list[OSError] = []
-        for final_path, staged_path in reversed(published):
-            if final_path.exists():
-                try:
-                    final_path.replace(staged_path)
-                except OSError as rollback_error:
-                    rollback_errors.append(rollback_error)
-        if rollback_errors:
-            raise RuntimeError(
-                "CVAT output publishing failed and rollback was incomplete"
-            ) from exc
-        raise
+    publish_staged_files(
+        staged_paths,
+        final_paths,
+        overwrite=False,
+        conflict_hint="use a new output directory",
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -144,14 +124,160 @@ def _validate_trajectory(trajectory: dict) -> None:
         raise ValueError("unsupported trajectory schema")
     video = trajectory.get("video", {})
     frames = trajectory.get("frames", [])
-    if video.get("frame_count") != len(frames):
+    frame_count = video.get("frame_count")
+    if (
+        not isinstance(frame_count, int)
+        or isinstance(frame_count, bool)
+        or frame_count <= 0
+        or frame_count != len(frames)
+    ):
         raise ValueError("trajectory frame count does not match video metadata")
+    width = video.get("width")
+    height = video.get("height")
+    fps = video.get("fps")
+    if (
+        not isinstance(width, (int, float))
+        or isinstance(width, bool)
+        or not isinstance(height, (int, float))
+        or isinstance(height, bool)
+        or not math.isfinite(float(width))
+        or not math.isfinite(float(height))
+        or float(width) <= 0
+        or float(height) <= 0
+    ):
+        raise ValueError("trajectory video dimensions must be finite and positive")
+    if (
+        not isinstance(fps, (int, float))
+        or isinstance(fps, bool)
+        or not math.isfinite(float(fps))
+        or float(fps) <= 0
+    ):
+        raise ValueError("trajectory video fps must be finite and positive")
     for expected_index, frame in enumerate(frames):
         if frame.get("frame_idx") != expected_index:
             raise ValueError("trajectory frames must be contiguous and zero-based")
+        timestamp = frame.get("timestamp_s")
+        if (
+            not isinstance(timestamp, (int, float))
+            or isinstance(timestamp, bool)
+            or not math.isfinite(float(timestamp))
+            or not math.isclose(
+                float(timestamp),
+                expected_index / float(fps),
+                rel_tol=0,
+                abs_tol=1e-6,
+            )
+        ):
+            raise ValueError(
+                f"trajectory timestamp is invalid at frame {expected_index}"
+            )
         names = tuple(frame.get("keypoints", {}).keys())
         if set(names) != set(KEYPOINT_NAMES):
             raise ValueError(f"frame {expected_index} does not contain the six keypoints")
+        for name, point in frame["keypoints"].items():
+            valid = point.get("valid")
+            if not isinstance(valid, bool):
+                raise ValueError(
+                    f"{name} at frame {expected_index} must have a boolean valid field"
+                )
+            x = point.get("x_px")
+            y = point.get("y_px")
+            confidence = point.get("confidence")
+            if confidence is not None and (
+                not isinstance(confidence, (int, float))
+                or isinstance(confidence, bool)
+                or not math.isfinite(float(confidence))
+                or not 0 <= float(confidence) <= 1
+            ):
+                raise ValueError(
+                    f"{name} at frame {expected_index} has invalid confidence"
+                )
+            if not valid:
+                if x is not None or y is not None:
+                    raise ValueError(
+                        "invalid points must use null coordinates: "
+                        f"{name} at frame {expected_index}"
+                    )
+                continue
+            if (
+                not isinstance(x, (int, float))
+                or isinstance(x, bool)
+                or not isinstance(y, (int, float))
+                or isinstance(y, bool)
+                or not math.isfinite(float(x))
+                or not math.isfinite(float(y))
+            ):
+                raise ValueError(
+                    "valid points must use finite coordinates: "
+                    f"{name} at frame {expected_index}"
+                )
+            if not 0 <= float(x) < float(width) or not 0 <= float(y) < float(height):
+                raise ValueError(
+                    f"{name} at frame {expected_index} is outside video bounds"
+                )
+
+
+def _validate_mapping_report(trajectory: dict, report: dict) -> None:
+    schema = report.get("schema")
+    if schema is not None and schema != "qianji.keypoint_mapping_report":
+        raise ValueError("unsupported mapping report schema")
+    frame_count = len(trajectory["frames"])
+    keypoints = report.get("keypoints", {})
+    if set(keypoints) != set(KEYPOINT_NAMES):
+        raise ValueError("mapping report does not contain the six keypoints")
+
+    def validate_indices(values: Sequence[int]) -> None:
+        for value in values:
+            if not isinstance(value, int) or not 0 <= value < frame_count:
+                raise ValueError(
+                    f"mapping report frame index is out of range: {value}"
+                )
+
+    for point_report in keypoints.values():
+        validate_indices(point_report.get("invalid_frames", []))
+        validate_indices(point_report.get("fallback_used_frames", []))
+    for name, point_report in keypoints.items():
+        reported_invalid = sorted(set(point_report.get("invalid_frames", [])))
+        expected_invalid = [
+            frame["frame_idx"]
+            for frame in trajectory["frames"]
+            if not frame["keypoints"][name]["valid"]
+        ]
+        if reported_invalid != expected_invalid:
+            raise ValueError(
+                f"mapping report invalid frame list disagrees for {name}"
+            )
+        reported_fallback = sorted(
+            set(point_report.get("fallback_used_frames", []))
+        )
+        expected_fallback = [
+            frame["frame_idx"]
+            for frame in trajectory["frames"]
+            if frame["keypoints"][name].get("fallback_used", False)
+        ]
+        if reported_fallback != expected_fallback:
+            raise ValueError(
+                f"mapping report fallback frame list disagrees for {name}"
+            )
+    for values in report.get("identity_corrections", {}).values():
+        validate_indices(values)
+    for values in report.get("identity_ambiguous_frames", {}).values():
+        validate_indices(values)
+
+    trajectory_source = trajectory.get("source", {})
+    report_source = report.get("source", {})
+    trajectory_hash = trajectory_source.get("predictions_sha256")
+    report_hash = report_source.get("predictions_sha256")
+    if trajectory_hash and report_hash and trajectory_hash != report_hash:
+        raise ValueError("mapping report and trajectory prediction hashes differ")
+    trajectory_video_hash = trajectory_source.get("video_sha256")
+    report_video_hash = report_source.get("video_sha256")
+    if (
+        trajectory_video_hash
+        and report_video_hash
+        and trajectory_video_hash != report_video_hash
+    ):
+        raise ValueError("mapping report and trajectory video hashes differ")
 
 
 def _ensure_output_available(output_dir: Path, owned_names: Sequence[str]) -> None:
@@ -238,7 +364,14 @@ def build_review_queue(
     context_frames: int = 2,
 ) -> dict:
     """Create a compact, reasoned queue instead of asking for blind frame review."""
+    if (
+        not isinstance(context_frames, int)
+        or isinstance(context_frames, bool)
+        or context_frames < 0
+    ):
+        raise ValueError("context_frames must be a nonnegative integer")
     _validate_trajectory(trajectory)
+    _validate_mapping_report(trajectory, report)
     frame_count = len(trajectory["frames"])
     reasons: dict[int, set[str]] = {}
     priorities: dict[int, str] = {}
@@ -260,6 +393,11 @@ def build_review_queue(
                     add(frame_idx, f"{name}:{flag}", "critical")
             else:
                 add(frame_idx, f"{name}:invalid", "critical")
+        for start, end in _contiguous_ranges(
+            point_report.get("fallback_used_frames", [])
+        ):
+            for frame_idx in {start, (start + end) // 2, end}:
+                add(frame_idx, f"{name}:fallback_review", "high")
 
     for group, values in report.get("identity_ambiguous_frames", {}).items():
         for frame_idx in values:
@@ -271,7 +409,16 @@ def build_review_queue(
             add(end, f"{group}_identity_correction_boundary", "high")
 
     direct_frames = sorted(reasons)
-    for frame_idx in direct_frames:
+    context_sources = [
+        frame_idx
+        for frame_idx in direct_frames
+        if priorities[frame_idx] == "critical"
+        or any(
+            not reason.endswith(":fallback_review")
+            for reason in reasons[frame_idx]
+        )
+    ]
+    for frame_idx in context_sources:
         for offset in range(-context_frames, context_frames + 1):
             neighbor = frame_idx + offset
             if neighbor not in reasons and 0 <= neighbor < frame_count:
@@ -327,9 +474,16 @@ def export_cvat_package(
     trajectory_path = Path(trajectory_path).resolve()
     report_path = Path(report_path).resolve()
     output_dir = Path(output_dir)
+    video_hash = _sha256(video_path)
+    trajectory_hash = _sha256(trajectory_path)
+    report_hash = _sha256(report_path)
     trajectory = _load_json(trajectory_path)
     report = _load_json(report_path)
     _validate_trajectory(trajectory)
+    _validate_mapping_report(trajectory, report)
+    expected_video_hash = trajectory.get("source", {}).get("video_sha256")
+    if expected_video_hash and expected_video_hash != video_hash:
+        raise ValueError("source video hash does not match trajectory")
     if not video_path.is_file():
         raise FileNotFoundError(video_path)
     if not skip_video_probe:
@@ -344,7 +498,6 @@ def export_cvat_package(
             raise ValueError("video metadata does not match trajectory")
 
     _ensure_output_available(output_dir, _OWNED_EXPORT_FILES)
-    output_dir.mkdir(parents=True, exist_ok=True)
     paths = CvatExportPaths(
         annotations=output_dir / "annotations.xml",
         manifest=output_dir / "cvat_manifest.json",
@@ -356,21 +509,58 @@ def export_cvat_package(
         "schema_version": "1.0.0",
         "created_at": _utc_now(),
         "video_path": str(video_path),
-        "video_sha256": _sha256(video_path),
+        "video_sha256": video_hash,
         "baseline_trajectory_path": str(trajectory_path),
-        "baseline_trajectory_sha256": _sha256(trajectory_path),
+        "baseline_trajectory_sha256": trajectory_hash,
         "mapping_report_path": str(report_path),
-        "mapping_report_sha256": _sha256(report_path),
+        "mapping_report_sha256": report_hash,
         "predictions_sha256": trajectory.get("source", {}).get(
             "predictions_sha256"
         ),
         "video": trajectory["video"],
         "keypoint_names": list(KEYPOINT_NAMES),
     }
-    paths.annotations.write_text(build_cvat_xml(trajectory), encoding="utf-8")
-    _write_json(paths.manifest, manifest)
-    _write_json(paths.review_queue, build_review_queue(trajectory, report))
-    _write_json(paths.skeleton_definition, _skeleton_definition())
+    annotations = build_cvat_xml(trajectory)
+    review_queue = build_review_queue(trajectory, report)
+    skeleton_definition = _skeleton_definition()
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(
+        prefix=f".{output_dir.name}.staging-",
+        dir=output_dir.parent,
+    ) as staging_name:
+        staging_dir = Path(staging_name)
+        staged = CvatExportPaths(
+            annotations=staging_dir / paths.annotations.name,
+            manifest=staging_dir / paths.manifest.name,
+            review_queue=staging_dir / paths.review_queue.name,
+            skeleton_definition=staging_dir / paths.skeleton_definition.name,
+        )
+        staged.annotations.write_text(annotations, encoding="utf-8")
+        _write_json(staged.manifest, manifest)
+        _write_json(staged.review_queue, review_queue)
+        _write_json(staged.skeleton_definition, skeleton_definition)
+        if _sha256(video_path) != video_hash:
+            raise RuntimeError("source video changed during CVAT export")
+        if _sha256(trajectory_path) != trajectory_hash:
+            raise RuntimeError("baseline trajectory changed during CVAT export")
+        if _sha256(report_path) != report_hash:
+            raise RuntimeError("mapping report changed during CVAT export")
+        publish_staged_files(
+            (
+                staged.annotations,
+                staged.manifest,
+                staged.review_queue,
+                staged.skeleton_definition,
+            ),
+            (
+                paths.annotations,
+                paths.manifest,
+                paths.review_queue,
+                paths.skeleton_definition,
+            ),
+            overwrite=False,
+            conflict_hint="use a new output directory",
+        )
     return paths
 
 
@@ -418,6 +608,13 @@ def apply_cvat_corrections(
     *,
     coordinate_tolerance: float = 0.01,
 ) -> tuple[dict, dict, dict]:
+    if (
+        not isinstance(coordinate_tolerance, (int, float))
+        or isinstance(coordinate_tolerance, bool)
+        or not math.isfinite(float(coordinate_tolerance))
+        or coordinate_tolerance < 0
+    ):
+        raise ValueError("coordinate tolerance must be finite and nonnegative")
     _validate_trajectory(baseline)
     parsed = _parse_cvat_frames(annotations_xml, len(baseline["frames"]))
     corrected = copy.deepcopy(baseline)
@@ -511,7 +708,7 @@ def apply_cvat_corrections(
             )
 
     if changes:
-        corrected["schema_version"] = "1.2.0"
+        corrected["schema_version"] = "1.3.0"
         corrected["manual_correction"] = {
             "applied": True,
             "policy": "manual_only_no_interpolation",
@@ -557,16 +754,44 @@ def import_cvat_package(
 ) -> CvatImportPaths:
     baseline_path = Path(baseline_path).resolve()
     output_dir = Path(output_dir)
-    manifest_payload = _load_json(manifest) if isinstance(manifest, Path) else manifest
+    manifest_path: Path | None = None
+    manifest_hash: str | None = None
+    if isinstance(manifest, Path):
+        manifest_path = manifest.resolve()
+        manifest_hash = _sha256(manifest_path)
+        manifest_payload = _load_json(manifest_path)
+    else:
+        manifest_payload = manifest
+    if (
+        not isinstance(manifest_payload, dict)
+        or manifest_payload.get("schema")
+        != "qianji.cvat_correction_manifest"
+    ):
+        raise ValueError("unsupported CVAT correction manifest schema")
+    manifest_keypoints = manifest_payload.get("keypoint_names")
+    if manifest_keypoints is not None and tuple(manifest_keypoints) != KEYPOINT_NAMES:
+        raise ValueError("CVAT manifest keypoint names do not match")
     baseline_hash = _sha256(baseline_path)
     if manifest_payload.get("baseline_trajectory_sha256") != baseline_hash:
         raise ValueError("baseline trajectory hash does not match CVAT manifest")
     baseline = _load_json(baseline_path)
+    annotations_path: Path | None = None
     if isinstance(annotations_xml, Path):
-        xml_text = annotations_xml.read_text(encoding="utf-8")
+        annotations_path = annotations_xml.resolve()
+        annotations_hash = _sha256(annotations_path)
+        xml_text = annotations_path.read_text(encoding="utf-8")
     else:
         xml_text = annotations_xml
+        annotations_hash = hashlib.sha256(xml_text.encode("utf-8")).hexdigest()
     corrected, corrections, report = apply_cvat_corrections(baseline, xml_text)
+    correction_provenance = {
+        "baseline_trajectory_sha256": baseline_hash,
+        "manifest_sha256": manifest_hash,
+        "annotations_sha256": annotations_hash,
+    }
+    if "manual_correction" in corrected:
+        corrected["manual_correction"].update(correction_provenance)
+    corrections.update(correction_provenance)
 
     video_hash = None
     if video_path is not None:
@@ -594,6 +819,8 @@ def import_cvat_package(
     )
     report["baseline_trajectory_sha256"] = baseline_hash
     report["manifest_schema_version"] = manifest_payload.get("schema_version")
+    report["manifest_sha256"] = manifest_hash
+    report["annotations_sha256"] = annotations_hash
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(
         prefix=f".{output_dir.name}.staging-",
@@ -627,6 +854,17 @@ def import_cvat_package(
             and _sha256(video_path) != video_hash
         ):
             raise RuntimeError("source video changed during CVAT import")
+        if (
+            annotations_path is not None
+            and _sha256(annotations_path) != annotations_hash
+        ):
+            raise RuntimeError("CVAT annotations changed during import")
+        if (
+            manifest_path is not None
+            and manifest_hash is not None
+            and _sha256(manifest_path) != manifest_hash
+        ):
+            raise RuntimeError("CVAT manifest changed during import")
         _publish_staged_import_outputs(staged, paths)
     return paths
 

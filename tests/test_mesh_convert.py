@@ -2,6 +2,7 @@ import json
 import stat
 import struct
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
@@ -12,7 +13,10 @@ from qianji_animal_motion.mesh_convert import (
 )
 
 
-def _write_triangle_glb(path: Path) -> None:
+def _write_triangle_glb(
+    path: Path,
+    mutate: Callable[[dict], None] | None = None,
+) -> None:
     document = {
         "asset": {"version": "2.0"},
         "scene": 0,
@@ -47,6 +51,8 @@ def _write_triangle_glb(path: Path) -> None:
             },
         ],
     }
+    if mutate is not None:
+        mutate(document)
     json_chunk = json.dumps(document, separators=(",", ":")).encode("utf-8")
     json_chunk += b" " * (-len(json_chunk) % 4)
     positions = struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0)
@@ -102,6 +108,33 @@ def test_probe_glb_reports_triangle_mesh(tmp_path: Path) -> None:
     assert metadata.bounds_max == [1.0, 1.0, 0.0]
 
 
+def test_probe_glb_rejects_primitive_without_position_accessor(
+    tmp_path: Path,
+) -> None:
+    glb = tmp_path / "missing-position.glb"
+
+    def remove_position(document: dict) -> None:
+        document["meshes"][0]["primitives"][0]["attributes"] = {}
+
+    _write_triangle_glb(glb, remove_position)
+
+    with pytest.raises(ValueError, match="POSITION accessor"):
+        probe_glb(glb)
+
+
+def test_probe_glb_rejects_reversed_position_bounds(tmp_path: Path) -> None:
+    glb = tmp_path / "reversed-bounds.glb"
+
+    def reverse_bounds(document: dict) -> None:
+        document["accessors"][0]["min"] = [2.0, 0.0, 0.0]
+        document["accessors"][0]["max"] = [1.0, 1.0, 0.0]
+
+    _write_triangle_glb(glb, reverse_bounds)
+
+    with pytest.raises(ValueError, match="POSITION bounds"):
+        probe_glb(glb)
+
+
 def test_convert_mesh_handles_unicode_path_and_writes_metadata(tmp_path: Path) -> None:
     fixture = tmp_path / "fixture.glb"
     _write_triangle_glb(fixture)
@@ -150,3 +183,38 @@ def test_convert_mesh_removes_temporary_output_after_failure(tmp_path: Path) -> 
 
     assert not output.exists()
     assert not list(tmp_path.glob("*.tmp.glb"))
+
+
+def test_convert_mesh_preserves_existing_pair_when_sidecar_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = tmp_path / "fixture.glb"
+    _write_triangle_glb(fixture)
+    assimp = tmp_path / "fake_assimp"
+    _write_fake_assimp(assimp, fixture)
+    source = tmp_path / "cat.fbx"
+    source.write_bytes(b"fbx")
+    output = tmp_path / "cat.glb"
+    sidecar = output.with_suffix(".metadata.json")
+    output.write_bytes(b"old glb")
+    sidecar.write_bytes(b"old metadata")
+    original_write_text = Path.write_text
+
+    def fail_sidecar(path: Path, *args: object, **kwargs: object) -> int:
+        if path.name == sidecar.name:
+            raise OSError("sidecar write failed")
+        return original_write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_sidecar)
+
+    with pytest.raises(OSError, match="sidecar write failed"):
+        convert_mesh(
+            source,
+            output,
+            overwrite=True,
+            assimp=str(assimp),
+        )
+
+    assert output.read_bytes() == b"old glb"
+    assert sidecar.read_bytes() == b"old metadata"

@@ -25,20 +25,12 @@ review_v3
 某次效果不好时，停止使用该目录并退回上一版即可。删除人工校正目录也不会影响
 原始预测或自动六点结果。
 
-## 2. 安装当前分支
+## 2. 安装项目
 
 ```bash
-eval "$(mamba shell hook --shell zsh)"
 mamba activate animal_pose
-
-cd "/Users/ke/Library/Mobile Documents/com~apple~CloudDocs/Code/拟态论文研究/Work/动物视频 → 关键点运动轨迹-CVAT人工校正"
-pip install -e . --no-deps
-
-cd "/Users/ke/Library/Mobile Documents/com~apple~CloudDocs/Code/拟态论文研究/Work/动物视频 → 关键点运动轨迹"
+pip install -e '.[dev]'
 ```
-
-第一个目录保存独立的校正功能分支；第二个目录保存真实视频和推理结果。安装完成
-后回到第二个目录运行后续命令。
 
 确认命令可用：
 
@@ -74,8 +66,8 @@ cvat_export/
 - `review_queue.json`：建议优先检查的异常帧。
 - `skeleton_definition.json`：六点名称和连线定义。
 
-程序会核对视频尺寸、帧数和帧率。当前测试视频应为 `1246x720`、30 FPS、
-272 帧。
+程序会核对视频尺寸、帧数和帧率，并校验轨迹与映射报告中的帧索引和来源
+哈希。导出期间任一输入发生变化时，不会发布导出包。
 
 ## 4. 创建 CVAT Online 任务
 
@@ -119,7 +111,7 @@ XML。
 检查顺序：
 
 1. `critical`：置空、身份模糊或异常跳变。
-2. `high`：左右身份自动切换区间的边界。
+2. `high`：左右身份修正边界，以及备用来源区间的起点、中点和终点。
 3. `context`：异常帧前后的上下文。
 4. 完成重点帧后，以 `0.5x` 速度播放整段视频。
 
@@ -132,7 +124,7 @@ CVAT 中的操作原则：
 - 不使用跨帧插值补足端轨迹。
 - 不删除整个 `quadruped_6` Skeleton track。
 
-导入文件已经把272帧全部设成独立关键帧，因此拖动一帧不会自动改动前后帧。
+导入文件已经把所有帧设成独立关键帧，因此拖动一帧不会自动改动前后帧。
 
 ## 6. 导出人工结果
 
@@ -170,12 +162,16 @@ review_v1/
 └── six_keypoints_corrected_preview.mp4
 ```
 
-- `corrected.json` 是供后续流程使用的最终候选轨迹。
+- `keypoint_trajectory_2d_corrected.json` 是供后续流程使用的最终候选轨迹。
 - `corrections.json` 只记录人工移动、恢复或置空的点。
 - `correction_report.json` 汇总修改数量和剩余无效帧。
-- `corrected_preview.mp4` 用于完整复看。
+- `six_keypoints_corrected_preview.mp4` 用于完整复看。
 
 如果视频、基线或 manifest 不是同一轮文件，哈希检查会拒绝导入。
+
+人工移动点的 `confidence` 仍保留原始模型分数；是否人工修改应读取
+`position_source: manual` 和 `review_status`，不能把模型置信度当成人工
+置信度。
 
 ## 8. 反复复查
 
@@ -230,18 +226,11 @@ outputs/manual_correction/cat_walk/review_v1/keypoint_trajectory_2d_corrected.js
 停止使用 `outputs/manual_correction/` 即可。原始 H5 和自动六点目录均不会被
 修改，不需要重新运行 DeepLabCut。
 
-如需同时让 `animal_pose` 环境退回原项目代码：
-
-```bash
-cd "/Users/ke/Library/Mobile Documents/com~apple~CloudDocs/Code/拟态论文研究/Work/动物视频 → 关键点运动轨迹"
-pip install -e . --no-deps
-```
-
 ## 10. 完成标准
 
-- 覆盖视频为272帧且能完整播放。
+- 校正预览覆盖基线报告中的全部帧且能完整播放。
 - 六个点没有明显单帧跳变。
 - 四个足端没有可见的长期左右交换。
 - 所有剩余空值在报告中有明确记录。
 - `correction_report.json` 显示 `interpolation_used: false`。
-- 原始39点 H5 和自动六点 JSON 哈希未变化。
+- 原始 39 点 H5 和自动六点 JSON 哈希未变化。

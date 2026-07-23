@@ -6,4 +6,4 @@ dependencies:
   - pip
   - ffmpeg
   - pip:
-      - -e .[gui,dev]
+      - -e .[dlc,gui,dev]

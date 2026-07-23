@@ -838,6 +838,7 @@ def write_json_outputs(
     trajectory = dict(result.trajectory)
     trajectory["source"] = {
         "video_path": str(source_video),
+        "video_sha256": _sha256(source_video),
         "predictions_path": str(source_h5),
         "predictions_sha256": _sha256(source_h5),
     }

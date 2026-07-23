@@ -8,12 +8,14 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Sequence
 
 import cv2
 import numpy as np
 import pandas as pd
 
+from qianji_animal_motion.artifact_io import publish_staged_files
 from qianji_animal_motion.semantic_cli import probe_video
 from qianji_animal_motion.semantic_mapping import (
     VideoInfo,
@@ -29,6 +31,7 @@ _LEG_COLORS = (
     (255, 120, 60),
 )
 _LEG_LABELS = ("FL", "FR", "RL", "RR")
+CAMERA_SIDES = ("animal_left_visible", "animal_right_visible", "unknown")
 
 
 @dataclass(frozen=True)
@@ -309,6 +312,7 @@ def suggest_anchor_candidates(
     video_path: Path,
     predictions_path: Path,
     output_dir: Path,
+    camera_side: str,
     individual: str = "animal0",
     confidence_threshold: float = 0.8,
     count: int = 12,
@@ -324,6 +328,11 @@ def suggest_anchor_candidates(
         raise FileNotFoundError(
             f"DeepLabCut predictions do not exist: {predictions_path}"
         )
+    if camera_side not in CAMERA_SIDES:
+        raise ValueError(
+            "camera_side must be animal_left_visible, "
+            "animal_right_visible, or unknown"
+        )
     paths = AnchorSuggestionPaths(
         contact_sheet=output_dir / "identity_anchor_candidates.jpg",
         manifest=output_dir / "identity_anchor_candidates.json",
@@ -334,6 +343,8 @@ def suggest_anchor_candidates(
             f"anchor review output already exists: {existing[0]}; use a new directory"
         )
 
+    video_hash = _sha256(video_path)
+    predictions_hash = _sha256(predictions_path)
     video = probe_video(video_path)
     predictions = pd.read_hdf(predictions_path)
     scorer, legs = _anchor_leg_arrays(predictions, individual=individual)
@@ -351,8 +362,6 @@ def suggest_anchor_candidates(
             "or inspect the DLC predictions"
         )
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    render_contact_sheet(video_path, candidates, legs, paths.contact_sheet)
     spacing = (
         max(1, int(round(video.fps * 0.5)))
         if min_spacing_frames is None
@@ -360,10 +369,10 @@ def suggest_anchor_candidates(
     )
     manifest = {
         "schema": "qianji.identity_anchor_candidates",
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "video": {
             "path": str(video_path),
-            "sha256": _sha256(video_path),
+            "sha256": video_hash,
             "width": video.width,
             "height": video.height,
             "fps": video.fps,
@@ -371,7 +380,7 @@ def suggest_anchor_candidates(
         },
         "predictions": {
             "path": str(predictions_path),
-            "sha256": _sha256(predictions_path),
+            "sha256": predictions_hash,
             "scorer": scorer,
             "individual": individual,
         },
@@ -379,13 +388,43 @@ def suggest_anchor_candidates(
             "confidence_threshold": confidence_threshold,
             "requested_count": count,
             "min_spacing_frames": spacing,
+            "camera_side": camera_side,
         },
         "candidates": candidates,
     }
-    paths.manifest.write_text(
-        json.dumps(manifest, ensure_ascii=True, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(
+        prefix=f".{output_dir.name}.staging-",
+        dir=output_dir.parent,
+    ) as staging_name:
+        staging_dir = Path(staging_name)
+        staged = AnchorSuggestionPaths(
+            contact_sheet=staging_dir / paths.contact_sheet.name,
+            manifest=staging_dir / paths.manifest.name,
+        )
+        render_contact_sheet(video_path, candidates, legs, staged.contact_sheet)
+        staged.manifest.write_text(
+            json.dumps(
+                manifest,
+                ensure_ascii=True,
+                indent=2,
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        if _sha256(video_path) != video_hash:
+            raise RuntimeError("source video changed during anchor suggestion")
+        if _sha256(predictions_path) != predictions_hash:
+            raise RuntimeError(
+                "source DeepLabCut predictions changed during anchor suggestion"
+            )
+        publish_staged_files(
+            (staged.contact_sheet, staged.manifest),
+            (paths.contact_sheet, paths.manifest),
+            overwrite=False,
+            conflict_hint="use a new output directory",
+        )
     return paths
 
 
@@ -396,6 +435,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--video", type=Path, required=True)
     parser.add_argument("--predictions", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--camera-side",
+        choices=CAMERA_SIDES,
+        required=True,
+        help="Visible anatomical side, or unknown when it cannot be established.",
+    )
     parser.add_argument("--individual", default="animal0")
     parser.add_argument("--confidence-threshold", type=float, default=0.8)
     parser.add_argument("--count", type=int, default=12)
@@ -408,6 +453,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         video_path=args.video,
         predictions_path=args.predictions,
         output_dir=args.output,
+        camera_side=args.camera_side,
         individual=args.individual,
         confidence_threshold=args.confidence_threshold,
         count=args.count,
