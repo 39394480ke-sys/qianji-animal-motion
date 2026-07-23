@@ -518,29 +518,66 @@ def _check_limb_structure(
 
 
 def _mark_jump_outliers(frames: list[dict], torso_scale: float) -> None:
+    scale = max(float(torso_scale), 1.0)
+    minimum_jump = 0.20
+    return_ratio = 0.5
     for name in SEMANTIC_KEYPOINTS:
+        points = [frame["keypoints"][name] for frame in frames]
         candidates = np.asarray(
-            [frame["keypoints"][name]["_candidate_xy"] for frame in frames],
+            [point["_candidate_xy"] for point in points],
             dtype=float,
         )
         if len(candidates) < 2:
             continue
-        displacement = np.linalg.norm(np.diff(candidates, axis=0), axis=1) / max(
-            torso_scale, 1.0
+        valid = np.asarray([bool(point["valid"]) for point in points])
+        finite = np.isfinite(candidates).all(axis=1)
+        displacement = (
+            np.linalg.norm(np.diff(candidates, axis=0), axis=1) / scale
         )
-        finite = displacement[np.isfinite(displacement)]
-        if len(finite) == 0:
-            continue
-        median = float(np.median(finite))
-        mad = float(np.median(np.abs(finite - median)))
-        threshold = max(0.20, median + 6.0 * mad)
-        for frame_index in np.flatnonzero(displacement > threshold) + 1:
-            point = frames[int(frame_index)]["keypoints"][name]
-            if "jump_outlier" not in point["flags"]:
-                point["flags"].append("jump_outlier")
-            point["valid"] = False
-            point["x_px"] = None
-            point["y_px"] = None
+        eligible = (
+            valid[:-1]
+            & valid[1:]
+            & finite[:-1]
+            & finite[1:]
+            & np.isfinite(displacement)
+        )
+        consumed = np.zeros(len(displacement), dtype=bool)
+        outliers: set[int] = set()
+
+        # Consume both edges of a return spike so its recovery frame stays valid.
+        for frame_index in range(1, len(candidates) - 1):
+            if not valid[frame_index - 1 : frame_index + 2].all():
+                continue
+            if not finite[frame_index - 1 : frame_index + 2].all():
+                continue
+            incoming = float(displacement[frame_index - 1])
+            outgoing = float(displacement[frame_index])
+            bridge = float(
+                np.linalg.norm(
+                    candidates[frame_index + 1] - candidates[frame_index - 1]
+                )
+                / scale
+            )
+            shorter_jump = min(incoming, outgoing)
+            if (
+                shorter_jump > minimum_jump
+                and bridge < return_ratio * shorter_jump
+            ):
+                outliers.add(frame_index)
+                consumed[frame_index - 1 : frame_index + 1] = True
+
+        remaining = eligible & ~consumed
+        baseline = displacement[remaining]
+        if len(baseline):
+            median = float(np.median(baseline))
+            mad = float(np.median(np.abs(baseline - median)))
+            threshold = max(minimum_jump, median + 6.0 * mad)
+            outliers.update(
+                (np.flatnonzero(remaining & (displacement > threshold)) + 1).tolist()
+            )
+
+        for frame_index in sorted(outliers):
+            _invalidate(points[frame_index], "jump_outlier")
 
 
 def _strip_internal_fields(frames: list[dict]) -> None:

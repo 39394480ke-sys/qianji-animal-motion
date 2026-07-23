@@ -9,7 +9,9 @@ import cv2
 
 from qianji_animal_motion.semantic_mapping import (
     REQUIRED_BODYPARTS,
+    SEMANTIC_KEYPOINTS,
     VideoInfo,
+    _mark_jump_outliers,
     build_semantic_mapping,
     resolve_leg_identities,
     write_json_outputs,
@@ -71,6 +73,27 @@ def _swap_pair(frame: pd.DataFrame, index: int, prefix: str) -> None:
 
 def _video_info(frame_count: int = 4) -> VideoInfo:
     return VideoInfo(width=120, height=100, fps=20.0, frame_count=frame_count)
+
+
+def _jump_frames(
+    x_positions: list[float],
+    *,
+    invalid_frame: int | None = None,
+) -> list[dict]:
+    frames = []
+    for frame_idx, x_position in enumerate(x_positions):
+        keypoints = {}
+        for name in SEMANTIC_KEYPOINTS:
+            valid = frame_idx != invalid_frame
+            keypoints[name] = {
+                "x_px": x_position if valid else None,
+                "y_px": 0.0 if valid else None,
+                "valid": valid,
+                "flags": ["low_confidence"] if not valid else [],
+                "_candidate_xy": (x_position, 0.0),
+            }
+        frames.append({"frame_idx": frame_idx, "keypoints": keypoints})
+    return frames
 
 
 def _write_anchor_manifest(
@@ -332,6 +355,63 @@ def test_low_confidence_point_is_null_without_interpolation() -> None:
     assert "low_confidence" in invalid["flags"]
     assert points[1]["keypoints"]["front_left_foot"]["x_px"] is not None
     assert points[3]["keypoints"]["front_left_foot"]["x_px"] is not None
+
+
+def test_isolated_jump_invalidates_only_center_frame() -> None:
+    frames = _jump_frames([0.0, 1.0, 100.0, 3.0, 4.0])
+
+    _mark_jump_outliers(frames, torso_scale=10.0)
+
+    points = [frame["keypoints"]["spine_front"] for frame in frames]
+    assert [point["valid"] for point in points] == [
+        True,
+        True,
+        False,
+        True,
+        True,
+    ]
+    assert points[2]["flags"] == ["jump_outlier"]
+    assert points[3]["flags"] == []
+
+
+def test_three_frame_isolated_jump_is_detected() -> None:
+    frames = _jump_frames([0.0, 100.0, 2.0])
+
+    _mark_jump_outliers(frames, torso_scale=10.0)
+
+    points = [frame["keypoints"]["spine_front"] for frame in frames]
+    assert [point["valid"] for point in points] == [True, False, True]
+    assert points[1]["flags"] == ["jump_outlier"]
+
+
+def test_sustained_jump_keeps_single_transition_alert() -> None:
+    frames = _jump_frames([0.0, 1.0, 50.0, 51.0, 52.0])
+
+    _mark_jump_outliers(frames, torso_scale=10.0)
+
+    points = [frame["keypoints"]["spine_front"] for frame in frames]
+    assert [point["valid"] for point in points] == [
+        True,
+        True,
+        False,
+        True,
+        True,
+    ]
+    assert points[2]["flags"] == ["jump_outlier"]
+    assert points[3]["flags"] == []
+
+
+def test_invalid_points_are_excluded_from_jump_detection() -> None:
+    frames = _jump_frames(
+        [0.0, 1.0, 2.0, 100.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        invalid_frame=3,
+    )
+
+    _mark_jump_outliers(frames, torso_scale=10.0)
+
+    point = frames[3]["keypoints"]["spine_front"]
+    assert point["valid"] is False
+    assert point["flags"] == ["low_confidence"]
 
 
 def test_non_finite_prediction_values_are_json_safe() -> None:
