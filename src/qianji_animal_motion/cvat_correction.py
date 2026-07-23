@@ -356,7 +356,7 @@ def apply_cvat_corrections(
     baseline: dict,
     annotations_xml: str,
     *,
-    coordinate_tolerance: float = 1e-4,
+    coordinate_tolerance: float = 0.01,
 ) -> tuple[dict, dict, dict]:
     _validate_trajectory(baseline)
     parsed = _parse_cvat_frames(annotations_xml, len(baseline["frames"]))

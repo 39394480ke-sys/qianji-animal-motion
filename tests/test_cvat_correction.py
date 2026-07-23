@@ -136,6 +136,26 @@ def test_unedited_cvat_round_trip_keeps_trajectory_unchanged() -> None:
     assert report["changed_points"] == 0
 
 
+def test_cvat_coordinate_rounding_is_not_recorded_as_a_manual_move() -> None:
+    baseline = _trajectory()
+    baseline["frames"][0]["keypoints"]["spine_front"].update(
+        x_px=10.0049,
+        y_px=20.0049,
+    )
+    root = _xml_root(baseline)
+    point = _xml_point(root, 0, "spine_front")
+    point.attrib["points"] = "10.000000,20.000000"
+
+    corrected, corrections, report = apply_cvat_corrections(
+        baseline,
+        ET.tostring(root, encoding="unicode"),
+    )
+
+    assert corrected == baseline
+    assert corrections["corrections"] == []
+    assert report["changed_points"] == 0
+
+
 def test_manual_move_changes_only_one_point_and_preserves_model_confidence() -> None:
     baseline = _trajectory()
     root = _xml_root(baseline)
