@@ -129,6 +129,33 @@ def _write_anchor_manifest(
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _mapping_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
+    video_path = tmp_path / "video.mp4"
+    writer = cv2.VideoWriter(
+        str(video_path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        20.0,
+        (120, 100),
+    )
+    assert writer.isOpened()
+    for _ in range(4):
+        writer.write(np.full((100, 120, 3), 240, dtype=np.uint8))
+    writer.release()
+    predictions_path = tmp_path / "predictions.h5"
+    _prediction_dataframe().to_hdf(
+        predictions_path,
+        key="df_with_missing",
+        mode="w",
+    )
+    anchor_manifest = tmp_path / "identity_anchor_candidates.json"
+    _write_anchor_manifest(
+        anchor_manifest,
+        video=video_path,
+        predictions=predictions_path,
+    )
+    return video_path, predictions_path, anchor_manifest
+
+
 def _leg_at(x: float, confidence: float = 0.9) -> np.ndarray:
     return np.asarray(
         [
@@ -580,6 +607,153 @@ def test_run_mapping_creates_json_report_and_preview(tmp_path: Path) -> None:
     assert trajectory["identity_anchor"]["frame_idx"] == 0
     assert trajectory["identity_anchor"]["front_assignment"] == "keep"
     assert trajectory["identity_anchor"]["rear_assignment"] == "keep"
+
+
+def test_run_mapping_discards_staged_outputs_when_preview_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video, predictions, anchor_manifest = _mapping_inputs(tmp_path)
+    output_dir = tmp_path / "outputs"
+
+    def fail_preview(_video: Path, _result: object, output: Path) -> None:
+        output.write_bytes(b"partial preview")
+        raise RuntimeError("preview failed")
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.semantic_cli.render_preview",
+        fail_preview,
+    )
+
+    with pytest.raises(RuntimeError, match="preview failed"):
+        run_mapping(
+            video,
+            predictions,
+            output_dir,
+            anchor_manifest=anchor_manifest,
+            anchor_frame=0,
+            front_anchor="keep",
+            rear_anchor="keep",
+        )
+
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(".outputs.staging-*"))
+
+
+def test_run_mapping_preview_failure_preserves_existing_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video, predictions, anchor_manifest = _mapping_inputs(tmp_path)
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    old_outputs = {
+        output_dir / "keypoint_trajectory_2d.json": b"old trajectory",
+        output_dir / "mapping_report.json": b"old report",
+        output_dir / "six_keypoints_preview.mp4": b"old preview",
+    }
+    for path, content in old_outputs.items():
+        path.write_bytes(content)
+
+    def fail_preview(_video: Path, _result: object, output: Path) -> None:
+        output.write_bytes(b"partial preview")
+        raise RuntimeError("preview failed")
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.semantic_cli.render_preview",
+        fail_preview,
+    )
+
+    with pytest.raises(RuntimeError, match="preview failed"):
+        run_mapping(
+            video,
+            predictions,
+            output_dir,
+            anchor_manifest=anchor_manifest,
+            anchor_frame=0,
+            front_anchor="keep",
+            rear_anchor="keep",
+            overwrite=True,
+        )
+
+    assert {path: path.read_bytes() for path in old_outputs} == old_outputs
+    assert not list(tmp_path.glob(".outputs.staging-*"))
+
+
+def test_run_mapping_discards_outputs_when_source_video_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video, predictions, anchor_manifest = _mapping_inputs(tmp_path)
+    output_dir = tmp_path / "outputs"
+
+    def mutate_video(_video: Path, _result: object, output: Path) -> None:
+        video.write_bytes(b"changed during mapping")
+        output.write_bytes(b"preview")
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.semantic_cli.render_preview",
+        mutate_video,
+    )
+
+    with pytest.raises(RuntimeError, match="source video changed"):
+        run_mapping(
+            video,
+            predictions,
+            output_dir,
+            anchor_manifest=anchor_manifest,
+            anchor_frame=0,
+            front_anchor="keep",
+            rear_anchor="keep",
+        )
+
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(".outputs.staging-*"))
+
+
+def test_run_mapping_rolls_back_when_publishing_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video, predictions, anchor_manifest = _mapping_inputs(tmp_path)
+    output_dir = tmp_path / "outputs"
+    original_replace = Path.replace
+    publish_count = 0
+
+    def fail_second_publish(source: Path, target: Path) -> Path:
+        nonlocal publish_count
+        target = Path(target)
+        if (
+            source.parent.name.startswith(".outputs.staging-")
+            and target.parent == output_dir
+        ):
+            publish_count += 1
+            if publish_count == 2:
+                raise OSError("publish failed")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail_second_publish)
+
+    with pytest.raises(OSError, match="publish failed"):
+        run_mapping(
+            video,
+            predictions,
+            output_dir,
+            anchor_manifest=anchor_manifest,
+            anchor_frame=0,
+            front_anchor="keep",
+            rear_anchor="keep",
+        )
+
+    assert not any(
+        (output_dir / name).exists()
+        for name in (
+            "keypoint_trajectory_2d.json",
+            "mapping_report.json",
+            "six_keypoints_preview.mp4",
+        )
+    )
+    assert not list(tmp_path.glob(".outputs.staging-*"))
 
 
 def test_run_mapping_requires_a_manual_anchor(tmp_path: Path) -> None:

@@ -7,6 +7,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Iterator, Sequence
 
 import cv2
@@ -28,6 +29,62 @@ class OutputPaths:
 
     def __iter__(self) -> Iterator[Path]:
         return iter((self.trajectory, self.report, self.preview))
+
+
+def _publish_staged_outputs(
+    staged: OutputPaths,
+    final: OutputPaths,
+    *,
+    overwrite: bool,
+) -> None:
+    staged_paths = tuple(staged)
+    final_paths = tuple(final)
+    missing = [path for path in staged_paths if not path.is_file()]
+    if missing:
+        raise RuntimeError(f"staged output is missing: {missing[0]}")
+    existing = [path for path in final_paths if path.exists()]
+    if existing and not overwrite:
+        raise FileExistsError(
+            f"output already exists: {existing[0]}; use --overwrite to replace it"
+        )
+
+    final.trajectory.parent.mkdir(parents=True, exist_ok=True)
+    backup_dir = staged.trajectory.parent / ".backup"
+    backup_dir.mkdir()
+    backups: list[tuple[Path, Path]] = []
+    published: list[tuple[Path, Path]] = []
+    try:
+        for final_path in final_paths:
+            if final_path.exists():
+                backup_path = backup_dir / final_path.name
+                final_path.replace(backup_path)
+                backups.append((backup_path, final_path))
+        for staged_path, final_path in zip(
+            staged_paths,
+            final_paths,
+            strict=True,
+        ):
+            staged_path.replace(final_path)
+            published.append((final_path, staged_path))
+    except Exception as exc:
+        rollback_errors: list[OSError] = []
+        for final_path, staged_path in reversed(published):
+            if final_path.exists():
+                try:
+                    final_path.replace(staged_path)
+                except OSError as rollback_error:
+                    rollback_errors.append(rollback_error)
+        for backup_path, final_path in reversed(backups):
+            if backup_path.exists():
+                try:
+                    backup_path.replace(final_path)
+                except OSError as rollback_error:
+                    rollback_errors.append(rollback_error)
+        if rollback_errors:
+            raise RuntimeError(
+                "output publishing failed and rollback was incomplete"
+            ) from exc
+        raise
 
 
 _COLORS = {
@@ -289,22 +346,38 @@ def run_mapping(
         rear_anchor_state=int(rear_anchor == "swap"),
         identity_anchor=identity_anchor,
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
-    trajectory_path, report_path = write_json_outputs(
-        result,
-        output_dir=output_dir,
-        source_h5=predictions_path,
-        source_video=video_path,
-    )
-    render_preview(video_path, result, outputs.preview)
-    after_hash = _file_sha256(predictions_path)
-    if before_hash != after_hash:
-        raise RuntimeError("source DeepLabCut predictions changed during mapping")
-    return OutputPaths(
-        trajectory=trajectory_path,
-        report=report_path,
-        preview=outputs.preview,
-    )
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(
+        prefix=f".{output_dir.name}.staging-",
+        dir=output_dir.parent,
+    ) as staging_name:
+        staging_dir = Path(staging_name)
+        staged_preview = staging_dir / outputs.preview.name
+        staged_trajectory, staged_report = write_json_outputs(
+            result,
+            output_dir=staging_dir,
+            source_h5=predictions_path,
+            source_video=video_path,
+        )
+        staged_outputs = OutputPaths(
+            trajectory=staged_trajectory,
+            report=staged_report,
+            preview=staged_preview,
+        )
+        render_preview(video_path, result, staged_outputs.preview)
+        after_hash = _file_sha256(predictions_path)
+        if before_hash != after_hash:
+            raise RuntimeError(
+                "source DeepLabCut predictions changed during mapping"
+            )
+        if video_hash != _file_sha256(video_path):
+            raise RuntimeError("source video changed during mapping")
+        _publish_staged_outputs(
+            staged_outputs,
+            outputs,
+            overwrite=overwrite,
+        )
+    return outputs
 
 
 def build_parser() -> argparse.ArgumentParser:
