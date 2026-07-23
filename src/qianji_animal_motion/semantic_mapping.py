@@ -271,10 +271,13 @@ def _candidate_point(
     if identity_ambiguous:
         flags.append("identity_ambiguous")
     valid = not flags
+    output_confidence = (
+        float(confidence) if np.isfinite(confidence) else None
+    )
     return {
         "x_px": float(x) if valid else None,
         "y_px": float(y) if valid else None,
-        "confidence": float(confidence),
+        "confidence": output_confidence,
         "valid": valid,
         "source": source,
         "identity_corrected": identity_corrected,
@@ -703,13 +706,20 @@ def build_semantic_mapping(
     for name in SEMANTIC_KEYPOINTS:
         points = [frame["keypoints"][name] for frame in frames]
         flags = Counter(flag for point in points for flag in point["flags"])
+        finite_confidences = [
+            point["confidence"]
+            for point in points
+            if point["confidence"] is not None
+        ]
         point_report[name] = {
             "valid_frames": sum(point["valid"] for point in points),
             "invalid_frames": [
                 index for index, point in enumerate(points) if not point["valid"]
             ],
-            "mean_confidence": float(
-                np.mean([point["confidence"] for point in points])
+            "mean_confidence": (
+                float(np.mean(finite_confidences))
+                if finite_confidences
+                else None
             ),
             "fallback_used_frames": [
                 index
@@ -798,12 +808,24 @@ def write_json_outputs(
     report["source"] = trajectory["source"]
     trajectory_path = output_dir / "keypoint_trajectory_2d.json"
     report_path = output_dir / "mapping_report.json"
-    trajectory_path.write_text(
-        json.dumps(trajectory, ensure_ascii=True, indent=2) + "\n",
-        encoding="utf-8",
+    trajectory_text = (
+        json.dumps(
+            trajectory,
+            ensure_ascii=True,
+            indent=2,
+            allow_nan=False,
+        )
+        + "\n"
     )
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=True, indent=2) + "\n",
-        encoding="utf-8",
+    report_text = (
+        json.dumps(
+            report,
+            ensure_ascii=True,
+            indent=2,
+            allow_nan=False,
+        )
+        + "\n"
     )
+    trajectory_path.write_text(trajectory_text, encoding="utf-8")
+    report_path.write_text(report_text, encoding="utf-8")
     return trajectory_path, report_path

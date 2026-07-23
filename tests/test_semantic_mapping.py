@@ -334,6 +334,54 @@ def test_low_confidence_point_is_null_without_interpolation() -> None:
     assert points[3]["keypoints"]["front_left_foot"]["x_px"] is not None
 
 
+def test_non_finite_prediction_values_are_json_safe() -> None:
+    predictions = _prediction_dataframe()
+    predictions.loc[
+        2,
+        ("test_model", "animal0", "front_left_paw", "x"),
+    ] = np.inf
+    predictions.loc[
+        2,
+        ("test_model", "animal0", "front_left_paw", "y"),
+    ] = -np.inf
+    predictions.loc[
+        2,
+        ("test_model", "animal0", "front_left_paw", "likelihood"),
+    ] = np.nan
+
+    result = build_semantic_mapping(predictions, _video_info())
+
+    point = result.trajectory["frames"][2]["keypoints"]["front_left_foot"]
+    assert point["x_px"] is None
+    assert point["y_px"] is None
+    assert point["confidence"] is None
+    assert point["valid"] is False
+    assert "non_finite" in point["flags"]
+    assert result.report["keypoints"]["front_left_foot"][
+        "mean_confidence"
+    ] == pytest.approx(0.9)
+    json.dumps(result.trajectory, allow_nan=False)
+    json.dumps(result.report, allow_nan=False)
+
+
+def test_all_non_finite_confidences_report_null_mean() -> None:
+    predictions = _prediction_dataframe()
+    predictions.loc[
+        :,
+        ("test_model", "animal0", "front_left_paw", "likelihood"),
+    ] = np.nan
+
+    result = build_semantic_mapping(predictions, _video_info())
+
+    assert all(
+        frame["keypoints"]["front_left_foot"]["confidence"] is None
+        for frame in result.trajectory["frames"]
+    )
+    assert (
+        result.report["keypoints"]["front_left_foot"]["mean_confidence"] is None
+    )
+
+
 def test_rejects_paw_that_is_not_distal_to_its_knee() -> None:
     predictions = _prediction_dataframe()
     for coord, value in (("x", 82.0), ("y", 42.0)):
@@ -353,6 +401,10 @@ def test_rejects_paw_that_is_not_distal_to_its_knee() -> None:
 def test_writes_json_outputs_without_modifying_source(tmp_path: Path) -> None:
     source = tmp_path / "predictions.h5"
     predictions = _prediction_dataframe()
+    predictions.loc[
+        2,
+        ("test_model", "animal0", "front_left_paw", "likelihood"),
+    ] = np.nan
     predictions.to_hdf(source, key="df_with_missing", mode="w")
     before = source.read_bytes()
     result = build_semantic_mapping(predictions, _video_info())
@@ -366,10 +418,36 @@ def test_writes_json_outputs_without_modifying_source(tmp_path: Path) -> None:
 
     payload = json.loads(trajectory_path.read_text(encoding="utf-8"))
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert "NaN" not in trajectory_path.read_text(encoding="utf-8")
+    assert "Infinity" not in trajectory_path.read_text(encoding="utf-8")
+    assert "NaN" not in report_path.read_text(encoding="utf-8")
+    assert "Infinity" not in report_path.read_text(encoding="utf-8")
     assert payload["schema"] == "qianji.keypoint_trajectory_2d"
     assert payload["video"]["frame_count"] == 4
+    assert payload["frames"][2]["keypoints"]["front_left_foot"]["confidence"] is None
     assert report["schema"] == "qianji.keypoint_mapping_report"
     assert source.read_bytes() == before
+
+
+def test_json_outputs_are_serialized_before_either_file_is_written(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "predictions.h5"
+    source.write_bytes(b"h5 fixture")
+    result = build_semantic_mapping(_prediction_dataframe(), _video_info())
+    result.report["unexpected_non_finite"] = np.nan
+    output_dir = tmp_path / "semantic"
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        write_json_outputs(
+            result,
+            output_dir=output_dir,
+            source_h5=source,
+            source_video=tmp_path / "video.mp4",
+        )
+
+    assert not (output_dir / "keypoint_trajectory_2d.json").exists()
+    assert not (output_dir / "mapping_report.json").exists()
 
 
 def test_run_mapping_creates_json_report_and_preview(tmp_path: Path) -> None:
