@@ -74,7 +74,13 @@ def _load_json(path: Path) -> dict:
 
 def _write_json(path: Path, payload: dict) -> None:
     path.write_text(
-        json.dumps(payload, ensure_ascii=True, indent=2) + "\n",
+        json.dumps(
+            payload,
+            ensure_ascii=True,
+            indent=2,
+            allow_nan=False,
+        )
+        + "\n",
         encoding="utf-8",
     )
 

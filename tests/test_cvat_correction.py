@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from qianji_animal_motion.cvat_correction import (
+    _write_json,
     apply_cvat_corrections,
     build_cvat_xml,
     build_review_queue,
@@ -154,6 +155,15 @@ def test_cvat_coordinate_rounding_is_not_recorded_as_a_manual_move() -> None:
     assert corrected == baseline
     assert corrections["corrections"] == []
     assert report["changed_points"] == 0
+
+
+def test_cvat_json_writer_rejects_non_finite_values(tmp_path: Path) -> None:
+    output = tmp_path / "unsafe.json"
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        _write_json(output, {"confidence": float("nan")})
+
+    assert not output.exists()
 
 
 def test_manual_move_changes_only_one_point_and_preserves_model_confidence() -> None:
