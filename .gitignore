@@ -39,4 +39,5 @@ htmlcov/
 venv/
 env/
 .env
+.worktrees/
 .DS_Store
