@@ -95,8 +95,8 @@ For every frame with valid spine points:
 2. define the local longitudinal unit vector from rear to front;
 3. define the local vertical vector perpendicular to the longitudinal vector,
    choosing the sign that points toward image-up;
-4. express each keypoint in this local basis and divide by the reference-frame
-   torso length in pixels;
+4. express each keypoint in this local basis and divide by that frame's torso
+   length in pixels;
 5. subtract the corresponding reference-frame local coordinate.
 
 The QianJi neutral frame is derived from the rig:
