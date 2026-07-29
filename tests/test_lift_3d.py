@@ -1,5 +1,8 @@
 import copy
+import hashlib
+import json
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -10,6 +13,7 @@ from qianji_animal_motion.lift_3d import (
     neutral_pose_from_rig,
     select_reference_frame,
 )
+from qianji_animal_motion.lift_cli import run_lift
 
 
 NEUTRAL = {
@@ -233,3 +237,109 @@ def test_rig_validation_rejects_missing_and_duplicate_sites() -> None:
     ]
     with pytest.raises(ValueError, match="distinct"):
         neutral_pose_from_rig(robot, duplicate)
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_run_lift_publishes_complete_hashed_artifact_set(
+    tmp_path: Path,
+) -> None:
+    robot, rig = _robot_and_rig()
+    trajectory_path = tmp_path / "trajectory.json"
+    robot_path = tmp_path / "robot.json"
+    rig_path = tmp_path / "rig.json"
+    _write_json(trajectory_path, _trajectory())
+    _write_json(robot_path, robot)
+    _write_json(rig_path, rig)
+
+    outputs = run_lift(
+        trajectory_path=trajectory_path,
+        robot_path=robot_path,
+        rig_path=rig_path,
+        output_dir=tmp_path / "lifted",
+    )
+
+    assert tuple(path.name for path in outputs) == (
+        "keypoint_motion.json",
+        "mesh_binding.json",
+        "lift_report.json",
+    )
+    assert all(path.is_file() for path in outputs)
+    binding = json.loads(outputs.binding.read_text(encoding="utf-8"))
+    assert binding["sources"] == {
+        "trajectory": {
+            "path": str(trajectory_path.resolve()),
+            "sha256": hashlib.sha256(trajectory_path.read_bytes()).hexdigest(),
+        },
+        "robot": {
+            "path": str(robot_path.resolve()),
+            "sha256": hashlib.sha256(robot_path.read_bytes()).hexdigest(),
+        },
+        "rig": {
+            "path": str(rig_path.resolve()),
+            "sha256": hashlib.sha256(rig_path.read_bytes()).hexdigest(),
+        },
+    }
+
+
+def test_run_lift_refuses_overwrite_and_missing_sources(tmp_path: Path) -> None:
+    robot, rig = _robot_and_rig()
+    trajectory_path = tmp_path / "trajectory.json"
+    robot_path = tmp_path / "robot.json"
+    rig_path = tmp_path / "rig.json"
+    _write_json(trajectory_path, _trajectory())
+    _write_json(robot_path, robot)
+    _write_json(rig_path, rig)
+    arguments = {
+        "trajectory_path": trajectory_path,
+        "robot_path": robot_path,
+        "rig_path": rig_path,
+        "output_dir": tmp_path / "lifted",
+    }
+
+    run_lift(**arguments)
+    with pytest.raises(FileExistsError, match="output already exists"):
+        run_lift(**arguments)
+
+    with pytest.raises(FileNotFoundError, match="trajectory source"):
+        run_lift(
+            **{
+                **arguments,
+                "trajectory_path": tmp_path / "missing.json",
+                "output_dir": tmp_path / "other",
+            }
+        )
+
+
+def test_run_lift_discards_staging_when_source_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    robot, rig = _robot_and_rig()
+    trajectory_path = tmp_path / "trajectory.json"
+    robot_path = tmp_path / "robot.json"
+    rig_path = tmp_path / "rig.json"
+    _write_json(trajectory_path, _trajectory())
+    _write_json(robot_path, robot)
+    _write_json(rig_path, rig)
+
+    def mutate_source(_path: Path, _payload: dict) -> None:
+        trajectory_path.write_text("changed", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "qianji_animal_motion.lift_cli._write_json",
+        mutate_source,
+    )
+    output_dir = tmp_path / "lifted"
+    with pytest.raises(RuntimeError, match="trajectory source changed"):
+        run_lift(
+            trajectory_path=trajectory_path,
+            robot_path=robot_path,
+            rig_path=rig_path,
+            output_dir=output_dir,
+        )
+
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(".lifted.staging-*"))
