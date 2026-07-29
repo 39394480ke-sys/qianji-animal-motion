@@ -29,7 +29,8 @@ Mesh rig；中性 lateral 坐标保持不变。
 
 输入 GLB 包含 2,154 个顶点和 4,304 个三角面，并被 QianJi 判定为 watertight。
 `abstract` preset 生成 12 个 sites、30 个 rods，刚性矩阵 rank 为 30，缺失
-端点为 0。272 帧都被 QianJi 预览器成功加载并生成约 9.03 秒的视频。
+端点为 0。272 帧都被 QianJi 预览器成功加载；按原轨迹 30 FPS 生成约
+9.07 秒的视频，轨迹最后一个时间戳为约 9.03 秒。
 
 | motion scale | feasible | marginal | unreachable | max error (m) | mean error (m) |
 | ---: | ---: | ---: | ---: | ---: | ---: |

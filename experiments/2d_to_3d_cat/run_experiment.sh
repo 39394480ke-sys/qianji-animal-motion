@@ -62,6 +62,7 @@ for scale in 0.10 0.25 0.50; do
     --rig-config "$RIG" \
     --output-dir "${SCALE_ROOT}/preview" \
     --record-video \
+    --video-fps 30 \
     --hide-frame-labels \
     --hide-role-labels
 done
