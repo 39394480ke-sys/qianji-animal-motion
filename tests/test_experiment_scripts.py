@@ -62,7 +62,7 @@ def test_2d_experiment_failure_does_not_publish_partial_case(
 
     assert result.returncode == 23
     assert not output_root.exists()
-    assert not list(tmp_path.glob(".published-case.case-staging-*"))
+    assert not list(tmp_path.glob(".published-case.case-staging.*"))
 
 
 def _initialize_repository(path: Path) -> None:

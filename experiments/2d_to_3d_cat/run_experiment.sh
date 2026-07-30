@@ -51,7 +51,7 @@ cleanup_staging() {
     return
   fi
   case "$CASE_STAGING_ROOT" in
-    "${OUTPUT_PARENT}/.${OUTPUT_NAME}.case-staging-"*)
+    "${OUTPUT_PARENT}/.${OUTPUT_NAME}.case-staging."*)
       rm -rf -- "$CASE_STAGING_ROOT"
       ;;
     *)
