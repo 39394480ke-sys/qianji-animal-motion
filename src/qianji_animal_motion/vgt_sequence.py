@@ -147,7 +147,7 @@ def validate_control_pair_against_sequence(
     if (
         rig.get("schema") != "qianji-key-site-map"
         or not isinstance(site_map, dict)
-        or tuple(site_map) != KEYPOINT_ROLES
+        or set(site_map) != set(KEYPOINT_ROLES)
     ):
         raise ValueError("rig must map the exact six control roles")
     site_indices = {name: index for index, name in enumerate(sequence.site_names)}

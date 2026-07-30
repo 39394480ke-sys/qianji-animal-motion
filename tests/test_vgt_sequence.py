@@ -15,6 +15,7 @@ from qianji_animal_motion.vgt_sequence import (
     compute_rod_constraint_metrics,
     load_and_validate_vgt_sequence,
     validate_control_motion,
+    validate_control_pair_against_sequence,
 )
 from qianji_animal_motion.vgt_sequence_cli import run_package_vgt_motion
 
@@ -287,6 +288,32 @@ def test_control_motion_accepts_exact_roles_in_json_independent_order() -> None:
     )
 
     assert validated.positions.shape == (3, 6, 3)
+
+
+def test_control_pair_accepts_exact_rig_roles_in_json_independent_order() -> None:
+    site_names, times, positions = _arrays()
+    robot = _robot()
+    sequence = VgtSequence(
+        site_names=tuple(site_names.tolist()),
+        times=times,
+        positions=positions,
+        rods=tuple(
+            (rod["site1"], rod["site2"]) for rod in robot["rod_groups"]
+        ),
+    )
+    rig = _rig()
+    rig["key_site_map"] = dict(sorted(rig["key_site_map"].items()))
+
+    desired, projected = validate_control_pair_against_sequence(
+        _control_motion(desired=True),
+        _control_motion(),
+        sequence,
+        rig,
+        expected_frames=3,
+        expected_fps=30.0,
+    )
+
+    assert desired.positions.shape == projected.positions.shape == (3, 6, 3)
 
 
 def test_renderer_outputs_visible_four_view_30fps_motion(tmp_path: Path) -> None:
