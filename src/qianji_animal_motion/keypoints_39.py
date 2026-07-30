@@ -66,6 +66,290 @@ class Observation39Result:
     report: dict
 
 
+def _finite_or_none(value: object) -> bool:
+    return value is None or (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def validate_39point_observation(
+    trajectory: dict,
+    quality_report: dict | None = None,
+    *,
+    expected_frames: int | None = None,
+    require_source_lineage: bool = False,
+) -> dict:
+    """Validate the complete semantic contract of a 39-point observation."""
+    if trajectory.get("schema") != "qianji.keypoint_trajectory_2d_39":
+        raise ValueError("unsupported 39-point observation schema")
+    if trajectory.get("schema_version") != "0.1.0":
+        raise ValueError("unsupported 39-point observation schema_version")
+    if (
+        trajectory.get("coordinate_system")
+        != "image_pixels_top_left_origin_x_right_y_down"
+    ):
+        raise ValueError("unsupported 39-point observation coordinate system")
+    if tuple(trajectory.get("roles", ())) != SUPERANIMAL_QUADRUPED_39:
+        raise ValueError("39-point observation roles are missing or reordered")
+    video = trajectory.get("video")
+    frames = trajectory.get("frames")
+    if not isinstance(video, dict) or not isinstance(frames, list) or not frames:
+        raise ValueError("39-point observation must contain video and frames")
+    try:
+        width = int(video["width"])
+        height = int(video["height"])
+        fps = float(video["fps"])
+        frame_count = int(video["frame_count"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("39-point video metadata is malformed") from error
+    if (
+        width <= 0
+        or height <= 0
+        or not math.isfinite(fps)
+        or fps <= 0.0
+        or frame_count != len(frames)
+        or (expected_frames is not None and frame_count != expected_frames)
+    ):
+        raise ValueError("39-point video metadata does not match frames")
+    anchor = trajectory.get("identity_anchor")
+    if (
+        not isinstance(anchor, dict)
+        or not isinstance(anchor.get("frame_idx"), int)
+        or not 0 <= anchor["frame_idx"] < frame_count
+    ):
+        raise ValueError("39-point identity_anchor is malformed")
+    for field in ("front_assignment", "rear_assignment"):
+        if anchor.get(field) not in {"keep", "swap"}:
+            raise ValueError(f"identity_anchor {field} must be keep or swap")
+    quality_policy = trajectory.get("quality_policy")
+    if (
+        not isinstance(quality_policy, dict)
+        or quality_policy.get("interpolation") != "none"
+        or quality_policy.get("smoothing") != "none"
+    ):
+        raise ValueError("39-point quality policy must forbid repair")
+    try:
+        confidence_threshold = float(
+            quality_policy["confidence_threshold"]
+        )
+        jump_threshold = float(
+            quality_policy["temporal_jump_torso_fraction"]
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("39-point quality thresholds are malformed") from error
+    if (
+        not math.isfinite(confidence_threshold)
+        or not 0.0 <= confidence_threshold <= 1.0
+        or not math.isfinite(jump_threshold)
+        or jump_threshold <= 0.0
+    ):
+        raise ValueError("39-point quality thresholds are invalid")
+    if require_source_lineage:
+        lineage = trajectory.get("source_lineage")
+        if not isinstance(lineage, dict):
+            raise ValueError("39-point source_lineage is required")
+        for field in (
+            "video_sha256",
+            "predictions_sha256",
+            "corrected_trajectory_sha256",
+        ):
+            value = lineage.get(field)
+            if not isinstance(value, str) or len(value) != 64:
+                raise ValueError(f"39-point source_lineage {field} is invalid")
+
+    invalid_by_role = {
+        role: [] for role in SUPERANIMAL_QUADRUPED_39
+    }
+    flags_by_role = {
+        role: Counter() for role in SUPERANIMAL_QUADRUPED_39
+    }
+    identity_frames = {
+        "front": {"swapped_frames": [], "ambiguous_frames": []},
+        "rear": {"swapped_frames": [], "ambiguous_frames": []},
+    }
+    previous_time = -math.inf
+    for frame_idx, frame in enumerate(frames):
+        if not isinstance(frame, dict) or frame.get("frame_idx") != frame_idx:
+            raise ValueError("39-point frames must be contiguous from zero")
+        try:
+            timestamp = float(frame["timestamp_s"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"39-point frame {frame_idx} timestamp is malformed"
+            ) from error
+        if (
+            not math.isfinite(timestamp)
+            or timestamp <= previous_time
+            or not math.isclose(
+                timestamp,
+                frame_idx / fps,
+                rel_tol=0.0,
+                abs_tol=1e-6,
+            )
+        ):
+            raise ValueError(
+                f"39-point frame {frame_idx} timestamp is invalid"
+            )
+        previous_time = timestamp
+        points = frame.get("keypoints")
+        if not isinstance(points, dict) or tuple(points) != SUPERANIMAL_QUADRUPED_39:
+            raise ValueError(f"39-point frame {frame_idx} roles differ")
+        for role, point in points.items():
+            if not isinstance(point, dict) or not isinstance(
+                point.get("valid"),
+                bool,
+            ):
+                raise ValueError(f"frame {frame_idx} role {role} validity is malformed")
+            flags = point.get("flags")
+            if (
+                not isinstance(flags, list)
+                or any(not isinstance(flag, str) or not flag for flag in flags)
+                or len(set(flags)) != len(flags)
+            ):
+                raise ValueError(f"frame {frame_idx} role {role} flags are malformed")
+            confidence = point.get("confidence")
+            if not _finite_or_none(confidence) or (
+                confidence is not None and not 0.0 <= float(confidence) <= 1.0
+            ):
+                raise ValueError(
+                    f"frame {frame_idx} role {role} confidence is invalid"
+                )
+            raw_x = point.get("raw_x_px")
+            raw_y = point.get("raw_y_px")
+            if not _finite_or_none(raw_x) or not _finite_or_none(raw_y):
+                raise ValueError(
+                    f"frame {frame_idx} role {role} raw coordinates are invalid"
+                )
+            if not isinstance(point.get("identity_corrected"), bool):
+                raise ValueError(
+                    f"frame {frame_idx} role {role} identity flag is malformed"
+                )
+            if point["valid"]:
+                try:
+                    x = float(point["x_px"])
+                    y = float(point["y_px"])
+                except (KeyError, TypeError, ValueError) as error:
+                    raise ValueError(
+                        f"frame {frame_idx} role {role} valid coordinates are malformed"
+                    ) from error
+                if (
+                    not np.isfinite([x, y]).all()
+                    or not 0.0 <= x < width
+                    or not 0.0 <= y < height
+                    or confidence is None
+                    or flags
+                ):
+                    raise ValueError(
+                        f"frame {frame_idx} role {role} valid point is inconsistent"
+                    )
+            else:
+                if point.get("x_px") is not None or point.get("y_px") is not None:
+                    raise ValueError(
+                        f"frame {frame_idx} role {role} invalid point coordinates "
+                        "must be null"
+                    )
+                if not flags:
+                    raise ValueError(
+                        f"frame {frame_idx} role {role} invalid point needs flags"
+                    )
+                invalid_by_role[role].append(frame_idx)
+                flags_by_role[role].update(flags)
+        for prefix in ("front", "back"):
+            report_name = "front" if prefix == "front" else "rear"
+            leg_roles = [
+                f"{prefix}_{side}_{joint}"
+                for side in ("left", "right")
+                for joint in _JOINTS
+            ]
+            ambiguous = [
+                "identity_ambiguous" in points[role]["flags"]
+                for role in leg_roles
+            ]
+            if any(ambiguous) and not all(ambiguous):
+                raise ValueError(
+                    f"frame {frame_idx} {prefix} identity ambiguity "
+                    "must invalidate both complete chains"
+                )
+            if all(ambiguous):
+                identity_frames[report_name]["ambiguous_frames"].append(
+                    frame_idx
+                )
+            corrected = [
+                points[role]["identity_corrected"]
+                for role in leg_roles
+            ]
+            if any(corrected) and not all(corrected):
+                raise ValueError(
+                    f"frame {frame_idx} {prefix} identity correction "
+                    "must cover both complete chains"
+                )
+            if all(corrected):
+                identity_frames[report_name]["swapped_frames"].append(
+                    frame_idx
+                )
+
+    if quality_report is not None:
+        if quality_report.get("schema") != "qianji.keypoint_39_quality_report":
+            raise ValueError("unsupported 39-point quality report schema")
+        if quality_report.get("schema_version") != "0.1.0":
+            raise ValueError("unsupported 39-point quality report schema_version")
+        for field in ("interpolation_applied", "smoothing_applied"):
+            if field not in quality_report or quality_report[field] is not False:
+                raise ValueError(f"quality report {field} must be explicit false")
+        if (
+            quality_report.get("frame_count") != frame_count
+            or quality_report.get("role_count") != len(SUPERANIMAL_QUADRUPED_39)
+        ):
+            raise ValueError("39-point quality report counts differ")
+        if quality_report.get("identity_anchor") != anchor:
+            raise ValueError("39-point quality report identity anchor differs")
+        if require_source_lineage and quality_report.get(
+            "source_lineage"
+        ) != trajectory.get("source_lineage"):
+            raise ValueError("39-point quality report source lineage differs")
+        identity_report = quality_report.get("identity")
+        if (
+            not isinstance(identity_report, dict)
+            or set(identity_report) != {"front", "rear"}
+        ):
+            raise ValueError("39-point quality identity report is malformed")
+        for report_name, assignment_field in (
+            ("front", "front_assignment"),
+            ("rear", "rear_assignment"),
+        ):
+            expected_identity = {
+                "anchor_assignment": anchor[assignment_field],
+                **identity_frames[report_name],
+            }
+            if identity_report.get(report_name) != expected_identity:
+                raise ValueError(
+                    f"39-point quality {report_name} identity report differs"
+                )
+        role_reports = quality_report.get("roles")
+        if not isinstance(role_reports, dict) or tuple(role_reports) != (
+            SUPERANIMAL_QUADRUPED_39
+        ):
+            raise ValueError("39-point role quality reports differ")
+        for role in SUPERANIMAL_QUADRUPED_39:
+            item = role_reports[role]
+            if (
+                not isinstance(item, dict)
+                or item.get("invalid_frames") != invalid_by_role[role]
+                or item.get("valid_frames")
+                != frame_count - len(invalid_by_role[role])
+                or item.get("flag_counts")
+                != dict(sorted(flags_by_role[role].items()))
+            ):
+                raise ValueError(f"quality report role {role!r} disagrees")
+    return {
+        "frames": frame_count,
+        "roles": len(SUPERANIMAL_QUADRUPED_39),
+        "invalid_points": sum(map(len, invalid_by_role.values())),
+    }
+
+
 def _validate_dataframe(
     dataframe: pd.DataFrame,
     video: VideoInfo,
@@ -102,6 +386,10 @@ def _validate_dataframe(
             "video frame_count does not match prediction rows: "
             f"{video.frame_count} != {len(dataframe)}"
         )
+    if not dataframe.index.equals(pd.RangeIndex(video.frame_count)):
+        raise ValueError(
+            "H5 frame index must be the exact zero-based contiguous range"
+        )
     if (
         video.width <= 0
         or video.height <= 0
@@ -131,9 +419,13 @@ def _bodypart_array(
             ["x", "y", "likelihood"],
         ],
     ].to_numpy(dtype=float)
-    if values.shape != (len(dataframe), 3) or not np.isfinite(values).all():
-        raise ValueError(f"bodypart {role!r} must contain finite x/y/likelihood")
-    if ((values[:, 2] < 0.0) | (values[:, 2] > 1.0)).any():
+    if values.shape != (len(dataframe), 3):
+        raise ValueError(f"bodypart {role!r} has malformed x/y/likelihood")
+    finite_likelihood = np.isfinite(values[:, 2])
+    if (
+        finite_likelihood
+        & ((values[:, 2] < 0.0) | (values[:, 2] > 1.0))
+    ).any():
         raise ValueError(f"bodypart {role!r} likelihood must be within [0, 1]")
     return values
 
@@ -239,6 +531,10 @@ def build_39point_observation(
         report_name: set(section["swapped_frames"])
         for report_name, section in identity_report.items()
     }
+    ambiguous_frames = {
+        report_name: set(section["ambiguous_frames"])
+        for report_name, section in identity_report.items()
+    }
 
     frames = []
     role_reports = {}
@@ -258,14 +554,33 @@ def build_39point_observation(
         values = resolved[role]
         for frame_idx, (x, y, confidence) in enumerate(values):
             flags = []
-            if confidence < confidence_threshold:
+            finite_xy = bool(np.isfinite([x, y]).all())
+            finite_confidence = math.isfinite(float(confidence))
+            if not finite_xy or not finite_confidence:
+                flags.append("non_finite")
+            if finite_confidence and confidence < confidence_threshold:
                 flags.append("low_confidence")
-            if not 0.0 <= x < video.width or not 0.0 <= y < video.height:
+            if finite_xy and (
+                not 0.0 <= x < video.width
+                or not 0.0 <= y < video.height
+            ):
                 flags.append("out_of_bounds")
-            if frame_idx > 0:
-                step = float(np.linalg.norm(values[frame_idx, :2] - values[frame_idx - 1, :2]))
+            if frame_idx > 0 and finite_xy and np.isfinite(
+                values[frame_idx - 1, :2]
+            ).all():
+                step = float(
+                    np.linalg.norm(
+                        values[frame_idx, :2]
+                        - values[frame_idx - 1, :2]
+                    )
+                )
                 if step > 0.75 * torso_scales[frame_idx]:
                     flags.append("temporal_jump")
+            if (
+                prefix is not None
+                and frame_idx in ambiguous_frames[prefix]
+            ):
+                flags.append("identity_ambiguous")
             valid = not flags
             if not valid:
                 invalid_frames.append(frame_idx)
@@ -278,23 +593,42 @@ def build_39point_observation(
                 {
                     "x_px": float(x) if valid else None,
                     "y_px": float(y) if valid else None,
-                    "raw_x_px": float(x),
-                    "raw_y_px": float(y),
-                    "confidence": float(confidence),
+                    "raw_x_px": float(x) if math.isfinite(float(x)) else None,
+                    "raw_y_px": float(y) if math.isfinite(float(y)) else None,
+                    "confidence": (
+                        float(confidence) if finite_confidence else None
+                    ),
                     "valid": valid,
                     "identity_corrected": identity_corrected,
                     "flags": flags,
                 }
             )
+        finite_confidences = values[
+            np.isfinite(values[:, 2]),
+            2,
+        ]
+        confidence_summary = {
+            "minimum": (
+                float(np.min(finite_confidences))
+                if len(finite_confidences)
+                else None
+            ),
+            "median": (
+                float(np.median(finite_confidences))
+                if len(finite_confidences)
+                else None
+            ),
+            "maximum": (
+                float(np.max(finite_confidences))
+                if len(finite_confidences)
+                else None
+            ),
+        }
         role_reports[role] = {
             "invalid_frames": invalid_frames,
             "valid_frames": len(values) - len(invalid_frames),
             "flag_counts": dict(sorted(flags_counter.items())),
-            "confidence": {
-                "minimum": float(np.min(values[:, 2])),
-                "median": float(np.median(values[:, 2])),
-                "maximum": float(np.max(values[:, 2])),
-            },
+            "confidence": confidence_summary,
         }
         for frame_idx, point in enumerate(role_points):
             if len(frames) <= frame_idx:
@@ -339,6 +673,11 @@ def build_39point_observation(
         "frame_count": video.frame_count,
         "role_count": len(SUPERANIMAL_QUADRUPED_39),
         "confidence_threshold": confidence_threshold,
+        "identity_anchor": {
+            "frame_idx": anchor_frame,
+            "front_assignment": front_anchor,
+            "rear_assignment": rear_anchor,
+        },
         "torso_scale_fallback_frames": torso_fallback_frames,
         "identity": identity_report,
         "roles": role_reports,

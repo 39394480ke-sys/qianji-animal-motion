@@ -13,6 +13,7 @@ import pytest
 from qianji_animal_motion.keypoints_39 import (
     SUPERANIMAL_QUADRUPED_39,
     build_39point_observation,
+    validate_39point_observation,
 )
 from qianji_animal_motion.keypoints_39_cli import run_observation_export
 from qianji_animal_motion.semantic_mapping import VideoInfo
@@ -174,6 +175,203 @@ def test_identity_swap_applies_to_complete_front_and_rear_chains() -> None:
     assert result.report["identity"]["rear"]["swapped_frames"] == [1]
 
 
+@pytest.mark.parametrize(
+    ("front_anchor", "rear_anchor"),
+    [("swap", "keep"), ("keep", "swap"), ("swap", "swap")],
+)
+def test_confirmed_anchor_assignment_swaps_the_complete_leg_chain(
+    front_anchor: str,
+    rear_anchor: str,
+) -> None:
+    values = _values(1)
+    for prefix in ("front", "back"):
+        for joint_index, joint in enumerate(("thai", "knee", "paw")):
+            values[f"{prefix}_left_{joint}"][0, :2] = [
+                10.0 + joint_index,
+                50.0,
+            ]
+            values[f"{prefix}_right_{joint}"][0, :2] = [
+                70.0 + joint_index,
+                50.0,
+            ]
+
+    result = build_39point_observation(
+        _dataframe(values),
+        _video(1),
+        anchor_frame=0,
+        front_anchor=front_anchor,
+        rear_anchor=rear_anchor,
+    )
+
+    point_map = result.trajectory["frames"][0]["keypoints"]
+    for prefix, assignment in (
+        ("front", front_anchor),
+        ("back", rear_anchor),
+    ):
+        for joint_index, joint in enumerate(("thai", "knee", "paw")):
+            expected_left = (
+                70.0 + joint_index
+                if assignment == "swap"
+                else 10.0 + joint_index
+            )
+            expected_right = (
+                10.0 + joint_index
+                if assignment == "swap"
+                else 70.0 + joint_index
+            )
+            assert point_map[f"{prefix}_left_{joint}"]["raw_x_px"] == (
+                expected_left
+            )
+            assert point_map[f"{prefix}_right_{joint}"]["raw_x_px"] == (
+                expected_right
+            )
+    assert result.trajectory["identity_anchor"] == {
+        "frame_idx": 0,
+        "front_assignment": front_anchor,
+        "rear_assignment": rear_anchor,
+    }
+
+
+def test_identity_ambiguity_invalidates_both_complete_leg_chains() -> None:
+    values = _values(2)
+    for prefix in ("front", "back"):
+        for joint_index, joint in enumerate(("thai", "knee", "paw")):
+            values[f"{prefix}_left_{joint}"][0, :2] = [
+                10.0 + joint_index,
+                50.0,
+            ]
+            values[f"{prefix}_right_{joint}"][0, :2] = [
+                70.0 + joint_index,
+                50.0,
+            ]
+            values[f"{prefix}_left_{joint}"][1, :2] = [40.0, 50.0]
+            values[f"{prefix}_right_{joint}"][1, :2] = [40.0, 50.0]
+
+    result = build_39point_observation(
+        _dataframe(values),
+        _video(2),
+        anchor_frame=0,
+    )
+
+    point_map = result.trajectory["frames"][1]["keypoints"]
+    for prefix in ("front", "back"):
+        for joint in ("thai", "knee", "paw"):
+            for side in ("left", "right"):
+                point = point_map[f"{prefix}_{side}_{joint}"]
+                assert point["valid"] is False
+                assert point["x_px"] is None
+                assert point["y_px"] is None
+                assert point["raw_x_px"] == 40.0
+                assert point["raw_y_px"] == 50.0
+                assert "identity_ambiguous" in point["flags"]
+    assert result.report["identity"]["front"]["ambiguous_frames"] == [1]
+    assert result.report["identity"]["rear"]["ambiguous_frames"] == [1]
+
+
+@pytest.mark.parametrize(
+    "index",
+    [
+        pd.Index([1, 0]),
+        pd.Index([0, 0]),
+        pd.Index([1, 2]),
+        pd.Index(["0", "1"]),
+    ],
+)
+def test_rejects_h5_rows_without_exact_zero_based_frame_index(
+    index: pd.Index,
+) -> None:
+    dataframe = _dataframe(_values(2))
+    dataframe.index = index
+
+    with pytest.raises(ValueError, match="frame index"):
+        build_39point_observation(dataframe, _video(2), anchor_frame=0)
+
+
+@pytest.mark.parametrize(
+    ("role", "coordinate"),
+    [
+        ("front_left_paw", 0),
+        ("front_left_paw", 2),
+        ("front_left_thai", 0),
+    ],
+)
+def test_non_finite_prediction_is_local_explicit_invalid_observation(
+    role: str,
+    coordinate: int,
+) -> None:
+    values = _values(2)
+    values[role][1, coordinate] = np.nan
+
+    result = build_39point_observation(
+        _dataframe(values),
+        _video(2),
+        anchor_frame=0,
+    )
+
+    assert len(result.trajectory["frames"]) == 2
+    assert all(
+        len(frame["keypoints"]) == 39
+        for frame in result.trajectory["frames"]
+    )
+    point = result.trajectory["frames"][1]["keypoints"][role]
+    assert point["valid"] is False
+    assert point["x_px"] is None
+    assert point["y_px"] is None
+    assert "non_finite" in point["flags"]
+    if coordinate == 0:
+        assert point["raw_x_px"] is None
+    if coordinate == 2:
+        assert point["confidence"] is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (
+            lambda trajectory, _report: trajectory["frames"][0][
+                "keypoints"
+            ]["nose"].update(
+                {"valid": False, "x_px": 10.0, "flags": ["low_confidence"]}
+            ),
+            "invalid point coordinates",
+        ),
+        (
+            lambda trajectory, _report: trajectory["frames"][0][
+                "keypoints"
+            ]["nose"].update({"confidence": 1.1}),
+            "confidence",
+        ),
+        (
+            lambda _trajectory, report: report.pop("interpolation_applied"),
+            "interpolation_applied",
+        ),
+        (
+            lambda _trajectory, report: report["identity_anchor"].update(
+                {"front_assignment": "swap"}
+            ),
+            "identity anchor",
+        ),
+    ],
+)
+def test_observation_validator_rejects_semantic_contract_breaks(
+    mutation,
+    message: str,
+) -> None:
+    result = build_39point_observation(
+        _dataframe(_values(2)),
+        _video(2),
+        anchor_frame=0,
+    )
+    mutation(result.trajectory, result.report)
+
+    with pytest.raises(ValueError, match=message):
+        validate_39point_observation(
+            result.trajectory,
+            result.report,
+            expected_frames=2,
+        )
+
+
 def test_rejects_role_loss_and_malformed_metadata() -> None:
     values = _values(2)
     missing = copy.deepcopy(values)
@@ -208,6 +406,72 @@ def _write_video(path: Path, frame_count: int = 2) -> None:
     writer.release()
 
 
+def _corrected_trajectory(
+    video: Path,
+    predictions: Path,
+    *,
+    frame_count: int = 2,
+    anchor_frame: int = 1,
+    front_assignment: str = "keep",
+    rear_assignment: str = "keep",
+) -> dict:
+    roles = (
+        "spine_front",
+        "spine_rear",
+        "front_left_foot",
+        "front_right_foot",
+        "rear_left_foot",
+        "rear_right_foot",
+    )
+    return {
+        "schema": "qianji.keypoint_trajectory_2d",
+        "schema_version": "1.3.0",
+        "coordinate_system": (
+            "image_pixels_top_left_origin_x_right_y_down"
+        ),
+        "video": {
+            "width": 100,
+            "height": 80,
+            "fps": 30.0,
+            "frame_count": frame_count,
+        },
+        "identity_anchor": {
+            "frame_idx": anchor_frame,
+            "timestamp_s": anchor_frame / 30.0,
+            "front_assignment": front_assignment,
+            "rear_assignment": rear_assignment,
+            "confirmed_by": "manual",
+            "video_sha256": hashlib.sha256(video.read_bytes()).hexdigest(),
+            "predictions_sha256": hashlib.sha256(
+                predictions.read_bytes()
+            ).hexdigest(),
+        },
+        "source": {
+            "video_sha256": hashlib.sha256(video.read_bytes()).hexdigest(),
+            "predictions_sha256": hashlib.sha256(
+                predictions.read_bytes()
+            ).hexdigest(),
+        },
+        "frames": [
+            {
+                "frame_idx": frame_idx,
+                "timestamp_s": frame_idx / 30.0,
+                "keypoints": {
+                    role: {
+                        "x_px": 20.0 + role_index,
+                        "y_px": 30.0,
+                        "confidence": 0.9,
+                        "valid": True,
+                        "flags": [],
+                    }
+                    for role_index, role in enumerate(roles)
+                },
+            }
+            for frame_idx in range(frame_count)
+        ],
+    }
+
+
 def test_observation_export_publishes_hashed_manifest_and_preview(
     tmp_path: Path,
 ) -> None:
@@ -219,7 +483,7 @@ def test_observation_export_publishes_hashed_manifest_and_preview(
     _dataframe(_values(2)).to_hdf(predictions, key="df")
     mesh.write_bytes(b"mesh")
     corrected_spine.write_text(
-        json.dumps({"identity_anchor": {"frame_idx": 1}}),
+        json.dumps(_corrected_trajectory(video, predictions)),
         encoding="utf-8",
     )
 
@@ -236,6 +500,12 @@ def test_observation_export_publishes_hashed_manifest_and_preview(
     assert all(path.is_file() and path.stat().st_size > 0 for path in outputs)
     manifest = json.loads(outputs.manifest.read_text(encoding="utf-8"))
     assert manifest["reference_frame"] == 1
+    assert manifest["identity_anchor"] == {
+        "frame_idx": 1,
+        "front_assignment": "keep",
+        "rear_assignment": "keep",
+        "confirmed_by": "manual",
+    }
     assert manifest["mesh_provenance"]["generation_method"] == (
         "hunyuan3d_from_video_frame"
     )
@@ -279,4 +549,49 @@ def test_observation_export_publishes_hashed_manifest_and_preview(
             output_dir=tmp_path / "case",
             reference_frame=1,
             mesh_generation_method="hunyuan3d_from_video_frame",
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda payload: payload.pop("identity_anchor"), "identity_anchor"),
+        (
+            lambda payload: payload["identity_anchor"].update(
+                {"front_assignment": "unknown"}
+            ),
+            "front_assignment",
+        ),
+        (
+            lambda payload: payload["identity_anchor"].update(
+                {"frame_idx": 0, "timestamp_s": 0.0}
+            ),
+            "reference_frame",
+        ),
+    ],
+)
+def test_observation_export_rejects_unconfirmed_or_mismatched_anchor(
+    tmp_path: Path,
+    mutation,
+    message: str,
+) -> None:
+    video = tmp_path / "cat.mp4"
+    predictions = tmp_path / "predictions.h5"
+    mesh = tmp_path / "cat.glb"
+    corrected_spine = tmp_path / "corrected.json"
+    _write_video(video)
+    _dataframe(_values(2)).to_hdf(predictions, key="df")
+    mesh.write_bytes(b"mesh")
+    corrected = _corrected_trajectory(video, predictions)
+    mutation(corrected)
+    corrected_spine.write_text(json.dumps(corrected), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        run_observation_export(
+            video_path=video,
+            predictions_path=predictions,
+            mesh_path=mesh,
+            corrected_spine_path=corrected_spine,
+            output_dir=tmp_path / "case",
+            reference_frame=1,
         )

@@ -91,11 +91,80 @@ def build_vgt_control_map(
     return {
         "schema": "qianji.vgt_control_map",
         "schema_version": "0.1.0",
-        "observation_role_count": len(neutral_landmarks.get("landmarks", {})),
+        "observation_role_count": 39,
         "control_role_count": len(KEYPOINT_ROLES),
         "controls": controls,
         "temporal_interpolation": False,
     }
+
+
+def validate_vgt_control_map(
+    control_map: dict,
+    robot: dict,
+    rig: dict,
+) -> dict:
+    """Validate the exact six observation-to-structural-site associations."""
+    if (
+        control_map.get("schema") != "qianji.vgt_control_map"
+        or control_map.get("schema_version") != "0.1.0"
+        or control_map.get("observation_role_count") != 39
+        or control_map.get("control_role_count") != len(KEYPOINT_ROLES)
+        or control_map.get("temporal_interpolation") is not False
+    ):
+        raise ValueError("VGT control map header is invalid")
+    controls = control_map.get("controls")
+    site_map = rig.get("key_site_map")
+    sites = robot.get("sites")
+    if (
+        not isinstance(controls, dict)
+        or tuple(controls) != KEYPOINT_ROLES
+        or not isinstance(site_map, dict)
+        or tuple(site_map) != KEYPOINT_ROLES
+        or not isinstance(sites, dict)
+    ):
+        raise ValueError("VGT control map must contain exact six roles")
+    used_sites = []
+    for role in KEYPOINT_ROLES:
+        item = controls[role]
+        if not isinstance(item, dict):
+            raise ValueError(f"VGT control {role!r} must be an object")
+        site = item.get("site")
+        if site not in sites:
+            raise ValueError(f"VGT control {role!r} references a missing site")
+        if site != site_map[role]:
+            raise ValueError(f"VGT control {role!r} differs from selected rig")
+        primary, fallback = CONTROL_OBSERVATIONS[role]
+        if (
+            item.get("observation_primary") != primary
+            or item.get("observation_fallback") != fallback
+        ):
+            raise ValueError(
+                f"VGT control {role!r} observation association is invalid"
+            )
+        if item.get("transfer") != (
+            "observation_displacement_plus_neutral_site"
+        ):
+            raise ValueError(f"VGT control {role!r} transfer is invalid")
+        _finite_vector(
+            item.get("neutral_site_xyz"),
+            dimensions=3,
+            label=f"VGT control {role!r} neutral site",
+        )
+        _finite_vector(
+            item.get("neutral_primary_xyz"),
+            dimensions=3,
+            label=f"VGT control {role!r} neutral primary",
+        )
+        if fallback is not None:
+            _finite_vector(
+                item.get("neutral_fallback_xyz"),
+                dimensions=3,
+                label=f"VGT control {role!r} neutral fallback",
+            )
+        used_sites.append(site)
+    if len(set(used_sites)) != len(KEYPOINT_ROLES):
+        raise ValueError("VGT control roles must map to six distinct sites")
+    return {"control_roles": len(KEYPOINT_ROLES), "distinct_sites": True}
 
 
 def _motion_point(frame: dict, role: str) -> tuple[np.ndarray, float] | None:
@@ -309,7 +378,7 @@ def apply_contraction_range(robot: dict, fraction: float) -> dict:
     rods = output.get("rod_groups")
     if not isinstance(rods, list) or not rods:
         raise ValueError("robot rod_groups must be a non-empty list")
-    mode = f"permitted_contraction_{fraction:.3f}"
+    experiment = f"bounded_relative_contraction_{fraction:.3f}"
     for index, rod in enumerate(rods):
         if not isinstance(rod, dict) or not isinstance(
             rod.get("constraint"),
@@ -331,11 +400,111 @@ def apply_contraction_range(robot: dict, fraction: float) -> dict:
             or maximum < current
         ):
             raise ValueError(f"rod {index} constraint lengths are invalid")
-        constraint["mode"] = mode
         constraint["effective_min_length"] = (1.0 - fraction) * current
+        constraint["slide_control_mode"] = "relative_around_initial"
+        constraint["slide_min_each_side_required"] = (
+            -0.5 * fraction * current
+        )
+        constraint["slide_max_each_side_required"] = (
+            0.5 * (maximum - current)
+        )
+        constraint["slide_range_each_side_required"] = (
+            constraint["slide_max_each_side_required"]
+        )
+        constraint["permitted_contraction_fraction"] = float(fraction)
     metadata = output.setdefault("metadata", {})
     if not isinstance(metadata, dict):
         raise ValueError("robot metadata must be an object")
     metadata["permitted_contraction_fraction"] = float(fraction)
-    metadata["constraint_experiment"] = mode
+    metadata["constraint_experiment"] = experiment
     return output
+
+
+def infer_uniform_contraction_fraction(robot: dict) -> float:
+    """Validate actual rod/control limits and return their common contraction."""
+    rods = robot.get("rod_groups")
+    if not isinstance(rods, list) or not rods:
+        raise ValueError("robot rod_groups must be a non-empty list")
+    fractions = []
+    for index, rod in enumerate(rods):
+        constraint = rod.get("constraint") if isinstance(rod, dict) else None
+        if not isinstance(constraint, dict):
+            raise ValueError(f"rod {index} must contain a constraint object")
+        try:
+            current = float(constraint["effective_current_length"])
+            minimum = float(constraint["effective_min_length"])
+            maximum = float(constraint["effective_max_length"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"rod {index} constraint lengths are malformed"
+            ) from error
+        if (
+            not np.isfinite([minimum, current, maximum]).all()
+            or current <= 0.0
+            or minimum <= 0.0
+            or minimum > current
+            or maximum < current
+        ):
+            raise ValueError(f"rod {index} constraint lengths are invalid")
+        fraction = (current - minimum) / current
+        if not -1e-12 <= fraction <= 0.5 + 1e-12:
+            raise ValueError(f"rod {index} contraction fraction is invalid")
+        fraction = min(max(fraction, 0.0), 0.5)
+        if fraction > 1e-12:
+            if (
+                constraint.get("slide_control_mode")
+                != "relative_around_initial"
+            ):
+                raise ValueError(
+                    f"rod {index} slide_control_mode does not permit contraction"
+                )
+            expected_min_slide = -0.5 * fraction * current
+            expected_max_slide = 0.5 * (maximum - current)
+            try:
+                min_slide = float(
+                    constraint["slide_min_each_side_required"]
+                )
+                max_slide = float(
+                    constraint["slide_max_each_side_required"]
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError(
+                    f"rod {index} slide limits are malformed"
+                ) from error
+            if not math.isclose(
+                min_slide,
+                expected_min_slide,
+                rel_tol=0.0,
+                abs_tol=1e-10,
+            ) or not math.isclose(
+                max_slide,
+                expected_max_slide,
+                rel_tol=0.0,
+                abs_tol=1e-10,
+            ):
+                raise ValueError(
+                    f"rod {index} slide limits disagree with contraction"
+                )
+        fractions.append(fraction)
+
+    if max(fractions) - min(fractions) > 1e-9:
+        raise ValueError("robot rods must use one uniform contraction fraction")
+    inferred = float(np.mean(fractions))
+    metadata = robot.get("metadata", {})
+    if isinstance(metadata, dict) and "permitted_contraction_fraction" in metadata:
+        try:
+            declared = float(metadata["permitted_contraction_fraction"])
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "robot metadata contraction fraction is malformed"
+            ) from error
+        if not math.isclose(
+            declared,
+            inferred,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                "robot metadata contraction fraction disagrees with rods"
+            )
+    return inferred

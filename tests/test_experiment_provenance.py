@@ -38,6 +38,7 @@ def test_provenance_records_revisions_scripts_environment_and_dirty_state(
         qianji_root=qianji,
         script_paths=[script],
         package_names=["pytest", "package-that-does-not-exist"],
+        invocation=["run_experiment.sh", "--fixture"],
     )
 
     assert clean["schema"] == "qianji.experiment_provenance"
@@ -54,6 +55,11 @@ def test_provenance_records_revisions_scripts_environment_and_dirty_state(
     assert clean["environment"]["python_version"]
     assert clean["environment"]["python_executable"]
     assert clean["environment"]["packages"]["pytest"]
+    assert clean["invocation"]["argv"] == [
+        "run_experiment.sh",
+        "--fixture",
+    ]
+    assert clean["invocation"]["working_directory"]
     assert (
         clean["environment"]["packages"]["package-that-does-not-exist"]
         is None

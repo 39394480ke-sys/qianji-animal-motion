@@ -12,6 +12,8 @@ from qianji_animal_motion.keypoints_39 import SUPERANIMAL_QUADRUPED_39
 from qianji_animal_motion.lift_39 import (
     build_neutral_landmarks_39,
     lift_39point_trajectory,
+    validate_lifted_39_motion,
+    validate_neutral_landmarks_39,
 )
 from qianji_animal_motion.lift_39_cli import run_lift_39
 from qianji_animal_motion.lift_3d import KEYPOINT_ROLES
@@ -25,6 +27,9 @@ RIG_NEUTRAL = {
     "rear_left_foot": [-0.5, 0.2, 0.0],
     "rear_right_foot": [-0.5, -0.2, 0.0],
 }
+VIDEO_SHA256 = "a" * 64
+PREDICTIONS_SHA256 = "b" * 64
+CORRECTED_SHA256 = "c" * 64
 
 
 def _robot_rig() -> tuple[dict, dict]:
@@ -87,6 +92,9 @@ def _trajectory_39(
     return {
         "schema": "qianji.keypoint_trajectory_2d_39",
         "schema_version": "0.1.0",
+        "coordinate_system": (
+            "image_pixels_top_left_origin_x_right_y_down"
+        ),
         "video": {
             "width": 100,
             "height": 80,
@@ -94,6 +102,16 @@ def _trajectory_39(
             "frame_count": len(frames),
         },
         "roles": list(SUPERANIMAL_QUADRUPED_39),
+        "identity_anchor": {
+            "frame_idx": 0,
+            "front_assignment": "keep",
+            "rear_assignment": "keep",
+        },
+        "source_lineage": {
+            "video_sha256": VIDEO_SHA256,
+            "predictions_sha256": PREDICTIONS_SHA256,
+            "corrected_trajectory_sha256": CORRECTED_SHA256,
+        },
         "frames": frames,
     }
 
@@ -122,13 +140,29 @@ def _corrected_spine(
         )
     return {
         "schema": "qianji.keypoint_trajectory_2d",
+        "schema_version": "1.3.0",
+        "coordinate_system": (
+            "image_pixels_top_left_origin_x_right_y_down"
+        ),
         "video": {
             "width": 100,
             "height": 80,
             "fps": 30.0,
             "frame_count": len(frames),
         },
-        "identity_anchor": {"frame_idx": 0},
+        "identity_anchor": {
+            "frame_idx": 0,
+            "timestamp_s": 0.0,
+            "front_assignment": "keep",
+            "rear_assignment": "keep",
+            "confirmed_by": "manual",
+            "video_sha256": VIDEO_SHA256,
+            "predictions_sha256": PREDICTIONS_SHA256,
+        },
+        "source": {
+            "video_sha256": VIDEO_SHA256,
+            "predictions_sha256": PREDICTIONS_SHA256,
+        },
         "frames": frames,
     }
 
@@ -310,19 +344,255 @@ def test_lift_moves_up_and_substitutes_invalid_without_lateral_motion() -> None:
     assert "interpolation" not in result.motion
 
 
+def test_role_uses_nearest_valid_reference_instead_of_bad_raw_anchor() -> None:
+    robot, rig = _robot_rig()
+    coordinates = _coordinates()
+    frames = []
+    for frame_idx in range(2):
+        points = {
+            role: _point(*coordinates[role])
+            for role in SUPERANIMAL_QUADRUPED_39
+        }
+        frames.append(
+            {
+                "frame_idx": frame_idx,
+                "timestamp_s": frame_idx / 30.0,
+                "keypoints": points,
+            }
+        )
+    frames[0]["keypoints"]["nose"] = _point(9999.0, -9999.0, valid=False)
+    trajectory = _trajectory_39(frames)
+    spine = _corrected_spine(
+        [((40.0, 40.0), (60.0, 40.0)), ((40.0, 40.0), (60.0, 40.0))]
+    )
+
+    neutral = build_neutral_landmarks_39(
+        trajectory,
+        spine,
+        robot,
+        rig,
+        reference_frame=0,
+    )
+    result = lift_39point_trajectory(
+        trajectory,
+        spine,
+        neutral,
+        motion_scale=1.0,
+    )
+
+    assert neutral["reference_frame_by_role"]["nose"] == 1
+    assert neutral["landmarks"]["nose"]["reference_frame"] == 1
+    np.testing.assert_allclose(
+        result.motion["frames"][1]["keypoints"]["nose"][:3],
+        neutral["landmarks"]["nose"]["xyz"],
+    )
+
+
+def test_role_without_valid_reference_is_permanently_unavailable() -> None:
+    robot, rig = _robot_rig()
+    coordinates = _coordinates()
+    frames = []
+    for frame_idx in range(3):
+        points = {
+            role: _point(*coordinates[role])
+            for role in SUPERANIMAL_QUADRUPED_39
+        }
+        points["tail_end"] = _point(
+            *coordinates["tail_end"],
+            valid=False,
+        )
+        frames.append(
+            {
+                "frame_idx": frame_idx,
+                "timestamp_s": frame_idx / 30.0,
+                "keypoints": points,
+            }
+        )
+    trajectory = _trajectory_39(frames)
+    spine = _corrected_spine(
+        [((40.0, 40.0), (60.0, 40.0))] * 3
+    )
+
+    neutral = build_neutral_landmarks_39(
+        trajectory,
+        spine,
+        robot,
+        rig,
+        reference_frame=0,
+    )
+    result = lift_39point_trajectory(
+        trajectory,
+        spine,
+        neutral,
+        motion_scale=1.0,
+    )
+
+    assert neutral["reference_frame_by_role"]["tail_end"] is None
+    assert neutral["landmarks"]["tail_end"]["available"] is False
+    assert all(
+        frame["keypoints"]["tail_end"][3] == 0.0
+        for frame in result.motion["frames"]
+    )
+    assert result.report["substitution_counts"]["reference_unavailable"] == 3
+
+
+def test_lift_validators_reject_anatomy_confidence_and_report_mismatch() -> None:
+    robot, rig = _robot_rig()
+    trajectory = _trajectory_39()
+    corrected = _corrected_spine()
+    neutral = build_neutral_landmarks_39(
+        trajectory,
+        corrected,
+        robot,
+        rig,
+        reference_frame=0,
+    )
+    result = lift_39point_trajectory(
+        trajectory,
+        corrected,
+        neutral,
+        motion_scale=0.1,
+    )
+    validate_neutral_landmarks_39(neutral)
+    validate_lifted_39_motion(
+        result.motion,
+        result.report,
+        observation=trajectory,
+        neutral_landmarks=neutral,
+        expected_frames=1,
+    )
+
+    invalid_neutral = json.loads(json.dumps(neutral))
+    invalid_neutral["landmarks"]["left_antler_end"][
+        "anatomy_applicable"
+    ] = True
+    with pytest.raises(ValueError, match="antler"):
+        validate_neutral_landmarks_39(invalid_neutral)
+
+    invalid_motion = json.loads(json.dumps(result.motion))
+    invalid_motion["frames"][0]["keypoints"]["nose"][3] = -0.1
+    with pytest.raises(ValueError, match="confidence"):
+        validate_lifted_39_motion(
+            invalid_motion,
+            result.report,
+            observation=trajectory,
+            neutral_landmarks=neutral,
+            expected_frames=1,
+        )
+
+    missing_field = json.loads(json.dumps(result.report))
+    del missing_field["interpolation_applied"]
+    with pytest.raises(ValueError, match="interpolation_applied"):
+        validate_lifted_39_motion(
+            result.motion,
+            missing_field,
+            observation=trajectory,
+            neutral_landmarks=neutral,
+            expected_frames=1,
+        )
+
+    mismatched_substitution = json.loads(json.dumps(result.report))
+    mismatched_substitution["substitutions"].pop()
+    with pytest.raises(ValueError, match="substitutions"):
+        validate_lifted_39_motion(
+            result.motion,
+            mismatched_substitution,
+            observation=trajectory,
+            neutral_landmarks=neutral,
+            expected_frames=1,
+        )
+
+    invalid_reference = json.loads(json.dumps(neutral))
+    invalid_reference["reference_frame_by_role"]["nose"] = 99
+    invalid_reference["landmarks"]["nose"]["reference_frame"] = 99
+    with pytest.raises(ValueError, match="reference frame"):
+        validate_lifted_39_motion(
+            result.motion,
+            result.report,
+            observation=trajectory,
+            neutral_landmarks=invalid_reference,
+            expected_frames=1,
+        )
+
+    missing_limit = json.loads(json.dumps(result.report))
+    missing_limit.pop("metric_depth_observed")
+    with pytest.raises(ValueError, match="metric_depth_observed"):
+        validate_lifted_39_motion(
+            result.motion,
+            missing_limit,
+            observation=trajectory,
+            neutral_landmarks=neutral,
+            expected_frames=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (
+            lambda trajectory, _corrected: trajectory["video"].update(
+                {"fps": 25.0}
+            ),
+            "video fps",
+        ),
+        (
+            lambda trajectory, _corrected: trajectory["video"].update(
+                {"width": 101}
+            ),
+            "video width",
+        ),
+        (
+            lambda trajectory, _corrected: trajectory["frames"][0].update(
+                {"timestamp_s": 0.01}
+            ),
+            "timestamp",
+        ),
+        (
+            lambda trajectory, _corrected: trajectory[
+                "source_lineage"
+            ].update({"video_sha256": "d" * 64}),
+            "video_sha256",
+        ),
+    ],
+)
+def test_lift_rejects_mismatched_video_timebase_or_lineage(
+    mutation,
+    message: str,
+) -> None:
+    robot, rig = _robot_rig()
+    trajectory = _trajectory_39()
+    corrected = _corrected_spine()
+    mutation(trajectory, corrected)
+
+    with pytest.raises(ValueError, match=message):
+        build_neutral_landmarks_39(
+            trajectory,
+            corrected,
+            robot,
+            rig,
+            reference_frame=0,
+        )
+
+
 def test_lift_39_cli_publishes_atomic_hashed_outputs(tmp_path: Path) -> None:
     robot, rig = _robot_rig()
+    source_paths = {}
     source_payloads = {
-        "trajectory_39": _trajectory_39(),
         "corrected_spine": _corrected_spine(),
         "robot": robot,
         "rig": rig,
     }
-    source_paths = {}
     for label, payload in source_payloads.items():
         path = tmp_path / f"{label}.json"
         path.write_text(json.dumps(payload), encoding="utf-8")
         source_paths[label] = path
+    trajectory = _trajectory_39()
+    trajectory["source_lineage"]["corrected_trajectory_sha256"] = (
+        hashlib.sha256(source_paths["corrected_spine"].read_bytes()).hexdigest()
+    )
+    trajectory_path = tmp_path / "trajectory_39.json"
+    trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
+    source_paths["trajectory_39"] = trajectory_path
 
     outputs = run_lift_39(
         trajectory_39_path=source_paths["trajectory_39"],
@@ -332,6 +602,7 @@ def test_lift_39_cli_publishes_atomic_hashed_outputs(tmp_path: Path) -> None:
         output_dir=tmp_path / "lifted",
         reference_frame=0,
         motion_scale=0.1,
+        case_root=tmp_path,
     )
 
     assert all(path.is_file() and path.stat().st_size > 0 for path in outputs)
@@ -340,6 +611,9 @@ def test_lift_39_cli_publishes_atomic_hashed_outputs(tmp_path: Path) -> None:
         assert neutral["sources"][label]["sha256"] == hashlib.sha256(
             path.read_bytes()
         ).hexdigest()
+        assert neutral["sources"][label]["path"] == path.relative_to(
+            tmp_path
+        ).as_posix()
     with pytest.raises(FileExistsError, match="output already exists"):
         run_lift_39(
             trajectory_39_path=source_paths["trajectory_39"],
@@ -349,4 +623,31 @@ def test_lift_39_cli_publishes_atomic_hashed_outputs(tmp_path: Path) -> None:
             output_dir=tmp_path / "lifted",
             reference_frame=0,
             motion_scale=0.1,
+            case_root=tmp_path,
+        )
+
+
+def test_lift_39_cli_rejects_wrong_corrected_parent_hash(
+    tmp_path: Path,
+) -> None:
+    robot, rig = _robot_rig()
+    paths = {}
+    for label, payload in {
+        "trajectory_39": _trajectory_39(),
+        "corrected_spine": _corrected_spine(),
+        "robot": robot,
+        "rig": rig,
+    }.items():
+        path = tmp_path / f"{label}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        paths[label] = path
+
+    with pytest.raises(ValueError, match="corrected_trajectory_sha256"):
+        run_lift_39(
+            trajectory_39_path=paths["trajectory_39"],
+            corrected_spine_path=paths["corrected_spine"],
+            robot_path=paths["robot"],
+            rig_path=paths["rig"],
+            output_dir=tmp_path / "lifted",
+            reference_frame=0,
         )

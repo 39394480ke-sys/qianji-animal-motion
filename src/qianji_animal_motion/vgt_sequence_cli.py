@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -15,6 +16,7 @@ from qianji_animal_motion.artifact_io import publish_staged_files
 from qianji_animal_motion.vgt_render import render_vgt_motion
 from qianji_animal_motion.vgt_sequence import (
     load_and_validate_vgt_sequence,
+    validate_control_pair_against_sequence,
     validate_render_rate,
 )
 
@@ -48,6 +50,34 @@ def _write_json(path: Path, payload: dict) -> None:
         json.dumps(payload, indent=2, ensure_ascii=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+
+
+def _case_relative(path: Path, case_root: Path) -> str:
+    try:
+        return path.resolve().relative_to(case_root.resolve()).as_posix()
+    except ValueError as error:
+        raise ValueError(
+            f"packaged artifact must be inside the case root: {path}"
+        ) from error
+
+
+def _relative_selected_candidate(selected: dict, case_root: Path) -> dict:
+    output = copy.deepcopy(selected)
+    candidate_root = output.get("candidate_root")
+    if isinstance(candidate_root, str) and Path(candidate_root).is_absolute():
+        output["candidate_root"] = _case_relative(
+            Path(candidate_root),
+            case_root,
+        )
+    artifacts = output.get("artifacts")
+    if isinstance(artifacts, dict):
+        for item in artifacts.values():
+            if not isinstance(item, dict):
+                continue
+            raw_path = item.get("path")
+            if isinstance(raw_path, str) and Path(raw_path).is_absolute():
+                item["path"] = _case_relative(Path(raw_path), case_root)
+    return output
 
 
 def run_package_vgt_motion(
@@ -84,6 +114,7 @@ def run_package_vgt_motion(
         raise ValueError("desired and projected motions must have different content")
 
     output_dir = Path(output_dir).resolve()
+    case_root = output_dir.parent
     final_paths = tuple(output_dir / name for name in _OUTPUT_NAMES)
     for path in final_paths:
         if path.exists():
@@ -103,6 +134,35 @@ def run_package_vgt_motion(
         expected_rods=expected_rods,
     )
     validate_render_rate(sequence, fps)
+    validate_control_pair_against_sequence(
+        desired,
+        projected,
+        sequence,
+        rig,
+        expected_frames=expected_frames,
+        expected_fps=fps,
+    )
+    if selected.get("eligible") is not True:
+        raise ValueError("selected candidate must be eligible")
+    selected_artifacts = selected.get("artifacts")
+    if not isinstance(selected_artifacts, dict):
+        raise ValueError("selected candidate artifacts are required")
+    selected_sources = {
+        "robot": "robot",
+        "rig": "rig",
+        "desired_motion": "desired",
+        "projected_motion": "projected",
+        "site_npz": "source_npz",
+    }
+    for artifact_label, source_label in selected_sources.items():
+        artifact = selected_artifacts.get(artifact_label)
+        if (
+            not isinstance(artifact, dict)
+            or artifact.get("sha256") != source_hashes[source_label]
+        ):
+            raise ValueError(
+                f"selected candidate {artifact_label} hash does not match input"
+            )
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(
@@ -136,7 +196,10 @@ def run_package_vgt_motion(
         manifest = {
             "schema": "qianji.vgt_motion_manifest",
             "schema_version": "0.1.0",
-            "selected_candidate": selected,
+            "selected_candidate": _relative_selected_candidate(
+                selected,
+                case_root,
+            ),
             "frame_count": expected_frames,
             "fps": float(fps),
             "time_range": [
@@ -150,35 +213,50 @@ def run_package_vgt_motion(
             "times_shape": list(sequence.times.shape),
             "positions_shape": list(sequence.positions.shape),
             "vgt_motion": {
-                "path": str(output_dir / "vgt_motion.npz"),
+                "path": _case_relative(
+                    output_dir / "vgt_motion.npz",
+                    case_root,
+                ),
                 "sha256": _sha256(staged_npz),
-                "source_path": str(sources["source_npz"]),
+                "source_path": _case_relative(
+                    sources["source_npz"],
+                    case_root,
+                ),
                 "source_sha256": source_hashes["source_npz"],
             },
             "robot": {
-                "path": str(sources["robot"]),
+                "path": _case_relative(sources["robot"], case_root),
                 "sha256": source_hashes["robot"],
             },
             "rig": {
-                "path": str(sources["rig"]),
+                "path": _case_relative(sources["rig"], case_root),
                 "sha256": source_hashes["rig"],
                 "key_site_map": rig.get("key_site_map"),
             },
             "desired_control_motion": {
-                "path": str(sources["desired"]),
+                "path": _case_relative(sources["desired"], case_root),
                 "sha256": source_hashes["desired"],
                 "schema": desired.get("schema"),
             },
             "projected_control_motion": {
-                "path": str(sources["projected"]),
+                "path": _case_relative(sources["projected"], case_root),
                 "sha256": source_hashes["projected"],
                 "schema": projected.get("schema"),
             },
             "render": {
                 **render_report,
-                "three_view": str(output_dir / "vgt_three_view.png"),
-                "isometric": str(output_dir / "vgt_isometric.png"),
-                "video": str(output_dir / "vgt_motion_30fps.mp4"),
+                "three_view": _case_relative(
+                    output_dir / "vgt_three_view.png",
+                    case_root,
+                ),
+                "isometric": _case_relative(
+                    output_dir / "vgt_isometric.png",
+                    case_root,
+                ),
+                "video": _case_relative(
+                    output_dir / "vgt_motion_30fps.mp4",
+                    case_root,
+                ),
             },
             "scientific_limits": {
                 "metric_depth_observed": False,

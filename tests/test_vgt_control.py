@@ -13,6 +13,8 @@ from qianji_animal_motion.vgt_control import (
     build_motion_informed_rig,
     build_target_control_motion,
     build_vgt_control_map,
+    infer_uniform_contraction_fraction,
+    validate_vgt_control_map,
 )
 from qianji_animal_motion.vgt_control_cli import run_prepare_vgt_control
 
@@ -163,6 +165,17 @@ def test_control_map_separates_observations_from_six_distinct_sites() -> None:
     ]
     assert report["neutral_substitutions"] == []
     assert target["schema"] == "qianji-keypoint-trajectory-v1"
+    validate_vgt_control_map(control_map, robot, rig)
+
+    invalid = copy.deepcopy(control_map)
+    invalid["controls"]["spine_front"]["site"] = "missing"
+    with pytest.raises(ValueError, match="missing"):
+        validate_vgt_control_map(invalid, robot, rig)
+
+    invalid_transfer = copy.deepcopy(control_map)
+    invalid_transfer["controls"]["spine_front"]["transfer"] = "unknown"
+    with pytest.raises(ValueError, match="transfer"):
+        validate_vgt_control_map(invalid_transfer, robot, rig)
 
 
 def test_missing_primary_without_declared_fallback_uses_neutral() -> None:
@@ -208,7 +221,7 @@ def test_motion_informed_rig_uses_minimum_distinct_assignment() -> None:
         build_motion_informed_rig(robot, _neutral())
 
 
-def test_contraction_range_copies_robot_and_changes_only_minimum_and_mode() -> None:
+def test_contraction_range_uses_qianji_recognized_bidirectional_fields() -> None:
     robot = _robot()
     original = copy.deepcopy(robot)
 
@@ -231,12 +244,49 @@ def test_contraction_range_copies_robot_and_changes_only_minimum_and_mode() -> N
         assert after_constraint["effective_max_length"] == (
             before_constraint["effective_max_length"]
         )
-        assert after_constraint["mode"] == "permitted_contraction_0.100"
+        assert after_constraint["mode"] == before_constraint["mode"]
+        assert after_constraint["slide_control_mode"] == (
+            "relative_around_initial"
+        )
+        assert after_constraint["slide_min_each_side_required"] == (
+            pytest.approx(
+                -0.05 * before_constraint["effective_current_length"]
+            )
+        )
+        assert after_constraint["slide_max_each_side_required"] == (
+            pytest.approx(
+                0.5
+                * (
+                    before_constraint["effective_max_length"]
+                    - before_constraint["effective_current_length"]
+                )
+            )
+        )
+        assert after_constraint["slide_range_each_side_required"] == (
+            after_constraint["slide_max_each_side_required"]
+        )
+        assert after_constraint["permitted_contraction_fraction"] == 0.10
     assert contracted["metadata"]["permitted_contraction_fraction"] == 0.10
+    assert infer_uniform_contraction_fraction(contracted) == pytest.approx(0.10)
 
     for fraction in (-0.01, 0.500001, float("nan")):
         with pytest.raises(ValueError, match="fraction"):
             apply_contraction_range(robot, fraction)
+
+
+def test_infer_contraction_rejects_nonuniform_or_unrecognized_robot() -> None:
+    robot = apply_contraction_range(_robot(), 0.10)
+    robot["rod_groups"][0]["constraint"]["effective_min_length"] = 0.95
+    robot["rod_groups"][0]["constraint"][
+        "slide_min_each_side_required"
+    ] = -0.025
+    with pytest.raises(ValueError, match="uniform"):
+        infer_uniform_contraction_fraction(robot)
+
+    robot = apply_contraction_range(_robot(), 0.10)
+    del robot["rod_groups"][0]["constraint"]["slide_control_mode"]
+    with pytest.raises(ValueError, match="slide_control_mode"):
+        infer_uniform_contraction_fraction(robot)
 
 
 def test_prepare_cli_publishes_versioned_candidate_inputs(tmp_path: Path) -> None:

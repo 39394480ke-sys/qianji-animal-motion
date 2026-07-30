@@ -8,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
+from qianji_animal_motion.lift_3d import KEYPOINT_ROLES
+
 
 @dataclass(frozen=True)
 class VgtSequence:
@@ -15,6 +17,227 @@ class VgtSequence:
     times: np.ndarray
     positions: np.ndarray
     rods: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class ControlMotion:
+    times: np.ndarray
+    positions: np.ndarray
+    confidences: np.ndarray
+
+
+def validate_control_motion(
+    motion: dict,
+    *,
+    expected_frames: int,
+    expected_fps: float,
+) -> ControlMotion:
+    """Validate one exact six-role QianJi control-motion trajectory."""
+    if motion.get("schema") != "qianji-keypoint-trajectory-v1":
+        raise ValueError("control motion schema is unsupported")
+    try:
+        fps = float(motion["fps"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("control motion fps must be finite") from error
+    if (
+        not math.isfinite(fps)
+        or not math.isfinite(expected_fps)
+        or expected_fps <= 0.0
+        or not math.isclose(fps, expected_fps, rel_tol=0.0, abs_tol=1e-9)
+    ):
+        raise ValueError("control motion fps does not match expected fps")
+    frames = motion.get("frames")
+    if not isinstance(frames, list) or len(frames) != expected_frames:
+        raise ValueError(
+            f"control motion must contain exactly {expected_frames} frames"
+        )
+    times = np.empty(expected_frames, dtype=float)
+    positions = np.empty((expected_frames, len(KEYPOINT_ROLES), 3), dtype=float)
+    confidences = np.empty((expected_frames, len(KEYPOINT_ROLES)), dtype=float)
+    for frame_idx, frame in enumerate(frames):
+        if not isinstance(frame, dict):
+            raise ValueError(f"control frame {frame_idx} must be an object")
+        points = frame.get("keypoints")
+        if not isinstance(points, dict) or tuple(points) != KEYPOINT_ROLES:
+            raise ValueError(
+                f"control frame {frame_idx} must contain the exact six control roles"
+            )
+        try:
+            time = float(frame["time"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"control frame {frame_idx} time must be finite"
+            ) from error
+        if not math.isfinite(time):
+            raise ValueError(f"control frame {frame_idx} time must be finite")
+        times[frame_idx] = time
+        for role_idx, role in enumerate(KEYPOINT_ROLES):
+            try:
+                value = np.asarray(points[role], dtype=float)
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    f"control frame {frame_idx} role {role!r} must contain XYZC"
+                ) from error
+            if value.shape != (4,) or not np.isfinite(value).all():
+                raise ValueError(
+                    f"control frame {frame_idx} role {role!r} must contain finite XYZC"
+                )
+            if not 0.0 <= value[3] <= 1.0:
+                raise ValueError(
+                    f"control frame {frame_idx} role {role!r} confidence "
+                    "must be within [0, 1]"
+                )
+            positions[frame_idx, role_idx] = value[:3]
+            confidences[frame_idx, role_idx] = value[3]
+    if expected_frames > 1 and not np.all(np.diff(times) > 0.0):
+        raise ValueError("control motion times must be strictly increasing")
+    expected_times = np.arange(expected_frames, dtype=float) / expected_fps
+    if not np.allclose(times, expected_times, rtol=0.0, atol=1e-6):
+        raise ValueError("control motion times must match frame_idx/fps")
+    for array in (times, positions, confidences):
+        array.setflags(write=False)
+    return ControlMotion(
+        times=times,
+        positions=positions,
+        confidences=confidences,
+    )
+
+
+def validate_control_pair_against_sequence(
+    desired: dict,
+    projected: dict,
+    sequence: VgtSequence,
+    rig: dict,
+    *,
+    expected_frames: int,
+    expected_fps: float,
+    position_tolerance_m: float = 1e-9,
+) -> tuple[ControlMotion, ControlMotion]:
+    """Cross-check desired/projected controls and projected VGT site targets."""
+    desired_motion = validate_control_motion(
+        desired,
+        expected_frames=expected_frames,
+        expected_fps=expected_fps,
+    )
+    projected_motion = validate_control_motion(
+        projected,
+        expected_frames=expected_frames,
+        expected_fps=expected_fps,
+    )
+    if not np.allclose(
+        desired_motion.times,
+        projected_motion.times,
+        rtol=0.0,
+        atol=1e-9,
+    ):
+        raise ValueError("desired and projected control times differ")
+    if not np.allclose(
+        projected_motion.times,
+        sequence.times,
+        rtol=0.0,
+        atol=1e-9,
+    ):
+        raise ValueError("projected control and VGT sequence times differ")
+    if not math.isfinite(position_tolerance_m) or position_tolerance_m < 0.0:
+        raise ValueError("position tolerance must be finite and non-negative")
+    site_map = rig.get("key_site_map")
+    if (
+        rig.get("schema") != "qianji-key-site-map"
+        or not isinstance(site_map, dict)
+        or tuple(site_map) != KEYPOINT_ROLES
+    ):
+        raise ValueError("rig must map the exact six control roles")
+    site_indices = {name: index for index, name in enumerate(sequence.site_names)}
+    for role_idx, role in enumerate(KEYPOINT_ROLES):
+        site_name = site_map[role]
+        if site_name not in site_indices:
+            raise ValueError(f"control role {role!r} references a missing VGT site")
+        expected = sequence.positions[:, site_indices[site_name], :]
+        actual = projected_motion.positions[:, role_idx, :]
+        if not np.allclose(
+            actual,
+            expected,
+            rtol=0.0,
+            atol=position_tolerance_m,
+        ):
+            raise ValueError(
+                f"projected control motion for {role!r} does not match VGT NPZ"
+            )
+    return desired_motion, projected_motion
+
+
+def compute_rod_constraint_metrics(
+    sequence: VgtSequence,
+    robot: dict,
+    *,
+    violation_epsilon_m: float = 1e-12,
+) -> dict:
+    """Recompute every rod's permitted node-length violation from the NPZ."""
+    try:
+        port_offset = float(robot.get("port_offset", 0.0))
+    except (TypeError, ValueError) as error:
+        raise ValueError("robot port_offset must be finite") from error
+    if (
+        not math.isfinite(port_offset)
+        or port_offset < 0.0
+        or not math.isfinite(violation_epsilon_m)
+        or violation_epsilon_m < 0.0
+    ):
+        raise ValueError("rod metric tolerances must be finite and non-negative")
+    rods = robot.get("rod_groups")
+    if not isinstance(rods, list) or len(rods) != len(sequence.rods):
+        raise ValueError("robot rods do not match the VGT sequence topology")
+    indices = {name: index for index, name in enumerate(sequence.site_names)}
+    violations = np.empty((len(sequence.times), len(rods)), dtype=float)
+    for rod_idx, rod in enumerate(rods):
+        if not isinstance(rod, dict):
+            raise ValueError(f"rod {rod_idx} must be an object")
+        site1 = rod.get("site1")
+        site2 = rod.get("site2")
+        if site1 not in indices or site2 not in indices or site1 == site2:
+            raise ValueError(f"rod {rod_idx} references invalid endpoints")
+        constraint = rod.get("constraint")
+        if not isinstance(constraint, dict):
+            raise ValueError(f"rod {rod_idx} constraint must be an object")
+        try:
+            minimum = float(constraint["effective_min_length"])
+            maximum = float(constraint["effective_max_length"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"rod {rod_idx} effective limits are malformed"
+            ) from error
+        if (
+            not np.isfinite([minimum, maximum]).all()
+            or minimum < 0.0
+            or maximum < minimum
+        ):
+            raise ValueError(f"rod {rod_idx} effective limits are invalid")
+        lengths = np.linalg.norm(
+            sequence.positions[:, indices[site2], :]
+            - sequence.positions[:, indices[site1], :],
+            axis=1,
+        )
+        minimum_node = minimum + 2.0 * port_offset
+        maximum_node = maximum + 2.0 * port_offset
+        violations[:, rod_idx] = np.maximum.reduce(
+            (
+                minimum_node - lengths,
+                lengths - maximum_node,
+                np.zeros_like(lengths),
+            )
+        )
+    frame_max = np.max(violations, axis=1)
+    frame_fraction = np.mean(
+        violations > violation_epsilon_m,
+        axis=1,
+    )
+    return {
+        "max_edge_violation_m": float(np.max(frame_max)),
+        "max_violated_rod_fraction": float(np.max(frame_fraction)),
+        "mean_edge_violation_m": float(np.mean(violations)),
+        "frame_max_edge_violation_m": frame_max.astype(float).tolist(),
+        "frame_violated_rod_fraction": frame_fraction.astype(float).tolist(),
+    }
 
 
 def _validate_rods(

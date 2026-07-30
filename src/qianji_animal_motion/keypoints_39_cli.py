@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -19,6 +20,7 @@ from qianji_animal_motion.keypoints_39 import (
     Observation39Result,
     build_39point_observation,
 )
+from qianji_animal_motion.lift_3d import _validate_trajectory
 from qianji_animal_motion.semantic_cli import probe_video
 
 
@@ -87,6 +89,92 @@ def _write_json(path: Path, payload: dict) -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+def _load_json(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid JSON source: {path}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON source must contain an object: {path}")
+    return payload
+
+
+def _confirmed_identity_anchor(
+    corrected: dict,
+    *,
+    video,
+    reference_frame: int,
+    video_sha256: str,
+    predictions_sha256: str,
+) -> dict:
+    frames = _validate_trajectory(corrected)
+    expected_video = {
+        "width": video.width,
+        "height": video.height,
+        "fps": video.fps,
+        "frame_count": video.frame_count,
+    }
+    corrected_video = corrected["video"]
+    for field in ("width", "height", "frame_count"):
+        if corrected_video[field] != expected_video[field]:
+            raise ValueError(
+                f"corrected trajectory video {field} does not match source"
+            )
+    if not math.isclose(
+        float(corrected_video["fps"]),
+        float(expected_video["fps"]),
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    ):
+        raise ValueError("corrected trajectory video fps does not match source")
+
+    anchor = corrected.get("identity_anchor")
+    if not isinstance(anchor, dict):
+        raise ValueError("corrected trajectory identity_anchor is required")
+    if anchor.get("frame_idx") != reference_frame:
+        raise ValueError(
+            "corrected identity_anchor frame_idx must match reference_frame"
+        )
+    if anchor.get("confirmed_by") != "manual":
+        raise ValueError("corrected identity_anchor must be manually confirmed")
+    for field in ("front_assignment", "rear_assignment"):
+        if anchor.get(field) not in {"keep", "swap"}:
+            raise ValueError(f"identity_anchor {field} must be keep or swap")
+    try:
+        anchor_timestamp = float(anchor["timestamp_s"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("identity_anchor timestamp_s must be finite") from error
+    if not math.isfinite(anchor_timestamp) or not math.isclose(
+        anchor_timestamp,
+        frames[reference_frame]["timestamp_s"],
+        rel_tol=0.0,
+        abs_tol=1e-6,
+    ):
+        raise ValueError(
+            "identity_anchor timestamp_s must match the reference frame"
+        )
+
+    source = corrected.get("source")
+    if not isinstance(source, dict):
+        raise ValueError("corrected trajectory source hashes are required")
+    expected_hashes = {
+        "video_sha256": video_sha256,
+        "predictions_sha256": predictions_sha256,
+    }
+    for field, expected in expected_hashes.items():
+        if source.get(field) != expected:
+            raise ValueError(f"corrected trajectory {field} does not match input")
+        if anchor.get(field) != expected:
+            raise ValueError(f"identity_anchor {field} does not match input")
+
+    return {
+        "frame_idx": reference_frame,
+        "front_assignment": anchor["front_assignment"],
+        "rear_assignment": anchor["rear_assignment"],
+        "confirmed_by": "manual",
+    }
 
 
 def _role_color(role: str) -> tuple[int, int, int]:
@@ -204,6 +292,14 @@ def run_observation_export(
 
     hashes = {label: _sha256(path) for label, path in sources.items()}
     video = probe_video(sources["video"])
+    corrected = _load_json(sources["corrected_spine"])
+    identity_anchor = _confirmed_identity_anchor(
+        corrected,
+        video=video,
+        reference_frame=reference_frame,
+        video_sha256=hashes["video"],
+        predictions_sha256=hashes["predictions"],
+    )
     dataframe = pd.read_hdf(sources["predictions"])
     result = build_39point_observation(
         dataframe,
@@ -211,12 +307,23 @@ def run_observation_export(
         individual=individual,
         confidence_threshold=confidence_threshold,
         anchor_frame=reference_frame,
+        front_anchor=identity_anchor["front_assignment"],
+        rear_anchor=identity_anchor["rear_assignment"],
+    )
+    result.trajectory["source_lineage"] = {
+        "video_sha256": hashes["video"],
+        "predictions_sha256": hashes["predictions"],
+        "corrected_trajectory_sha256": hashes["corrected_spine"],
+    }
+    result.report["source_lineage"] = dict(
+        result.trajectory["source_lineage"]
     )
     scorer = result.report["scorer"]
     manifest = {
         "schema": "qianji.cat_39point_input_manifest",
         "schema_version": "0.1.0",
         "reference_frame": reference_frame,
+        "identity_anchor": identity_anchor,
         "sources": {
             label: {"path": str(path), "sha256": hashes[label]}
             for label, path in sources.items()

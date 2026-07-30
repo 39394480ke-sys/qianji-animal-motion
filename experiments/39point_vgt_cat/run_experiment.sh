@@ -6,36 +6,69 @@ export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
 : "${ANIMAL_DATA_ROOT:?Set ANIMAL_DATA_ROOT to the animal-motion checkout containing data/ and outputs/}"
 : "${QIANJI_ROOT:?Set QIANJI_ROOT to the read-only QianJi checkout}"
 : "${OUTPUT_ROOT:?Set OUTPUT_ROOT to a new versioned case directory}"
+FINAL_OUTPUT_ROOT="$OUTPUT_ROOT"
 
 VIDEO="${ANIMAL_DATA_ROOT}/data/processed/cat_walk_30fps_720p.mp4"
 PREDICTIONS="${ANIMAL_DATA_ROOT}/outputs/zero_shot/cat_walk/cat_walk_30fps_720p_superanimal_quadruped_hrnet_w32_fasterrcnn_resnet50_fpn_v2.h5"
 MESH="${ANIMAL_DATA_ROOT}/data/processed/小猫_assimp.glb"
 CORRECTED="${ANIMAL_DATA_ROOT}/outputs/manual_correction/cat_walk/review_v2_migrated/keypoint_trajectory_2d_corrected.json"
 
-EXPORT_CLI="${REPO_ROOT}/.venv/bin/qianji-export-39-keypoints"
-LIFT_CLI="${REPO_ROOT}/.venv/bin/qianji-lift-39-keypoints"
-CONTROL_CLI="${REPO_ROOT}/.venv/bin/qianji-prepare-vgt-control"
-PACKAGE_CLI="${REPO_ROOT}/.venv/bin/qianji-package-vgt-motion"
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 GENERATOR="${QIANJI_ROOT}/morph_generator/generate.py"
 REACHABILITY="${QIANJI_ROOT}/controller/check_keypoint_reachability.py"
 MORPHOLOGY="${QIANJI_ROOT}/controller/optimize_morphology_for_motion.py"
+QIANJI_REACHABILITY_CORE="${QIANJI_ROOT}/controller/reachability.py"
+QIANJI_SLIDE_ADAPTER="${QIANJI_ROOT}/controller/slide_control_adapter.py"
+QIANJI_XML_CONVERTER="${QIANJI_ROOT}/mujoco_builder/json2xml_v7_perrod.py"
+QIANJI_SCENE_BUILDER="${QIANJI_ROOT}/mujoco_builder/add_scene_to_xml.py"
+
+for command in git mamba jq ffmpeg ffprobe; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    printf 'Missing required command: %s\n' "$command" >&2
+    exit 2
+  fi
+done
 
 for source in \
   "$VIDEO" "$PREDICTIONS" "$MESH" "$CORRECTED" \
-  "$EXPORT_CLI" "$LIFT_CLI" "$CONTROL_CLI" "$PACKAGE_CLI" "$PYTHON" \
-  "$GENERATOR" "$REACHABILITY" "$MORPHOLOGY"; do
+  "$PYTHON" \
+  "$GENERATOR" "$REACHABILITY" "$MORPHOLOGY" \
+  "$QIANJI_REACHABILITY_CORE" "$QIANJI_SLIDE_ADAPTER" \
+  "$QIANJI_XML_CONVERTER" "$QIANJI_SCENE_BUILDER"; do
   if [[ ! -f "$source" ]]; then
     printf 'Missing required source or command: %s\n' "$source" >&2
     exit 2
   fi
 done
-if [[ -e "$OUTPUT_ROOT" ]]; then
-  printf 'OUTPUT_ROOT already exists; choose a new versioned directory: %s\n' "$OUTPUT_ROOT" >&2
+if [[ -e "$FINAL_OUTPUT_ROOT" ]]; then
+  printf 'OUTPUT_ROOT already exists; choose a new versioned directory: %s\n' "$FINAL_OUTPUT_ROOT" >&2
   exit 2
 fi
 
-OUTPUT_ROOT="$(mkdir -p "$(dirname "$OUTPUT_ROOT")" && cd "$(dirname "$OUTPUT_ROOT")" && pwd)/$(basename "$OUTPUT_ROOT")"
+OUTPUT_PARENT="$(dirname "$FINAL_OUTPUT_ROOT")"
+OUTPUT_NAME="$(basename "$FINAL_OUTPUT_ROOT")"
+mkdir -p "$OUTPUT_PARENT"
+OUTPUT_PARENT="$(cd "$OUTPUT_PARENT" && pwd -P)"
+FINAL_OUTPUT_ROOT="${OUTPUT_PARENT}/${OUTPUT_NAME}"
+CASE_STAGING_ROOT="$(mktemp -d "${OUTPUT_PARENT}/.${OUTPUT_NAME}.case-staging.XXXXXX")"
+
+cleanup_staging() {
+  if [[ -z "${CASE_STAGING_ROOT:-}" || ! -d "$CASE_STAGING_ROOT" ]]; then
+    return
+  fi
+  case "$CASE_STAGING_ROOT" in
+    "${OUTPUT_PARENT}/.${OUTPUT_NAME}.case-staging."*)
+      rm -rf -- "$CASE_STAGING_ROOT"
+      ;;
+    *)
+      printf 'Refusing to clean unexpected staging path: %s\n' "$CASE_STAGING_ROOT" >&2
+      ;;
+  esac
+}
+trap cleanup_staging EXIT
+trap 'exit 130' HUP INT TERM
+
+OUTPUT_ROOT="$CASE_STAGING_ROOT"
 mkdir -p \
   "$OUTPUT_ROOT/observation" \
   "$OUTPUT_ROOT/initial_model" \
@@ -47,7 +80,7 @@ mkdir -p \
   "$OUTPUT_ROOT/previews" \
   "$OUTPUT_ROOT/reports"
 
-"$EXPORT_CLI" \
+"$PYTHON" -m qianji_animal_motion.keypoints_39_cli \
   --video "$VIDEO" \
   --predictions "$PREDICTIONS" \
   --mesh "$MESH" \
@@ -71,6 +104,12 @@ mkdir -p \
 )
 cp "$OUTPUT_ROOT/initial_model/bbox_seed/rig_keypoints.json" \
   "$OUTPUT_ROOT/initial_model/rig_bbox.json"
+cp "$OUTPUT_ROOT/initial_model/robot.json" \
+  "$OUTPUT_ROOT/initial_model/robot_base.json"
+cp "$OUTPUT_ROOT/initial_model/robot.xml" \
+  "$OUTPUT_ROOT/initial_model/robot_base.xml"
+cp "$OUTPUT_ROOT/initial_model/robot_scene.xml" \
+  "$OUTPUT_ROOT/initial_model/robot_base_scene.xml"
 
 for scale_code in 005 010 015; do
   case "$scale_code" in
@@ -79,15 +118,16 @@ for scale_code in 005 010 015; do
     015) motion_scale="0.15" ;;
   esac
   scale_root="$OUTPUT_ROOT/scales/scale_${scale_code}"
-  "$LIFT_CLI" \
+  "$PYTHON" -m qianji_animal_motion.lift_39_cli \
     --trajectory-39 "$OUTPUT_ROOT/observation/keypoint_trajectory_2d_39.json" \
     --corrected-spine "$CORRECTED" \
-    --robot-json "$OUTPUT_ROOT/initial_model/robot.json" \
+    --robot-json "$OUTPUT_ROOT/initial_model/robot_base.json" \
     --rig "$OUTPUT_ROOT/initial_model/rig_bbox.json" \
     --output "$scale_root/landmarks" \
     --reference-frame 152 \
-    --motion-scale "$motion_scale"
-  "$CONTROL_CLI" \
+    --motion-scale "$motion_scale" \
+    --case-root "$OUTPUT_ROOT"
+  "$PYTHON" -m qianji_animal_motion.vgt_control_cli \
     --robot-json "$OUTPUT_ROOT/initial_model/robot.json" \
     --bbox-rig "$OUTPUT_ROOT/initial_model/rig_bbox.json" \
     --neutral-landmarks "$scale_root/landmarks/neutral_landmarks_39.json" \
@@ -172,12 +212,13 @@ run_reachability_candidate scale_005_bbox_base_c000 005 0.05 0.0 bbox no
 run_reachability_candidate scale_010_bbox_base_c000 010 0.10 0.0 bbox no
 run_reachability_candidate scale_015_bbox_base_c000 015 0.15 0.0 bbox no
 run_reachability_candidate scale_010_bbox_base_c010 010 0.10 0.1 bbox yes
+run_reachability_candidate scale_010_motion_informed_base_c000 010 0.10 0.0 motion_informed no
 run_reachability_candidate scale_010_motion_informed_base_c010 010 0.10 0.1 motion_informed yes
 
-morph_candidate="scale_010_motion_informed_morph_c010"
+morph_candidate="scale_010_motion_informed_morph_c000"
 morph_root="$OUTPUT_ROOT/candidates/$morph_candidate"
 scale_root="$OUTPUT_ROOT/scales/scale_010"
-morph_robot="$scale_root/control/robot_contraction_010.json"
+morph_robot="$scale_root/control/robot_contraction_000.json"
 morph_rig="$scale_root/control/rig_motion_informed.json"
 morph_target="$scale_root/control/target_control_motion_motion_informed.json"
 (
@@ -187,10 +228,9 @@ morph_target="$scale_root/control/target_control_motion_motion_informed.json"
     --rig-config "$morph_rig" \
     --keypoint-motion "$morph_target" \
     --base-reachability-report \
-      "$OUTPUT_ROOT/candidates/scale_010_motion_informed_base_c010/reachability/reachability_report.json" \
+      "$OUTPUT_ROOT/candidates/scale_010_motion_informed_base_c000/reachability/reachability_report.json" \
     --output-dir "$morph_root/morphology" \
-    --name animal_motion_cat_39point_optimized \
-    --allow-contraction
+    --name animal_motion_cat_39point_optimized
 )
 jq '{summary: .summary}' \
   "$morph_root/morphology/reachability_after/reachability_report.json" \
@@ -212,7 +252,7 @@ jq -n \
     expected_frames: 272,
     parameters: {
       motion_scale: 0.10,
-      contraction_fraction: 0.10,
+      contraction_fraction: 0.0,
       rig_variant: "motion_informed",
       morphology_variant: "optimized"
     },
@@ -239,6 +279,7 @@ jq -n \
 jq '.selected_candidate' "$OUTPUT_ROOT/reports/reachability_report.json" \
   > "$OUTPUT_ROOT/reports/selected_candidate.json"
 selected_root="$(jq -r '.selected_candidate.candidate_root' "$OUTPUT_ROOT/reports/reachability_report.json")"
+selected_root="$OUTPUT_ROOT/$selected_root"
 selected_meta="$selected_root/candidate.json"
 landmark_dir="$(jq -r '.publication.landmark_dir' "$selected_meta")"
 control_map="$(jq -r '.publication.control_map' "$selected_meta")"
@@ -255,10 +296,25 @@ cp "$control_map" "$OUTPUT_ROOT/control/vgt_control_map.json"
 cp "$selected_desired" "$OUTPUT_ROOT/control/target_control_keypoint_motion.json"
 cp "$selected_projected" "$OUTPUT_ROOT/control/projected_control_keypoint_motion.json"
 cp "$selected_rig" "$OUTPUT_ROOT/initial_model/rig_keypoints.json"
+cp "$selected_robot" "$OUTPUT_ROOT/initial_model/robot.json"
 
-"$PACKAGE_CLI" \
+(
+  cd "$QIANJI_ROOT"
+  mamba run -n biomimic python "$QIANJI_XML_CONVERTER" \
+    -i "$OUTPUT_ROOT/initial_model/robot.json" \
+    -o "$OUTPUT_ROOT/initial_model/robot.xml" \
+    --model-name animal_motion_cat_39point_selected
+  mamba run -n biomimic python "$QIANJI_SCENE_BUILDER" \
+    --input "$OUTPUT_ROOT/initial_model/robot.xml" \
+    --output "$OUTPUT_ROOT/initial_model/robot_scene.xml"
+)
+"$PYTHON" \
+  "$REPO_ROOT/experiments/39point_vgt_cat/record_robot_conversion.py" \
+  "$OUTPUT_ROOT"
+
+"$PYTHON" -m qianji_animal_motion.vgt_sequence_cli \
   --site-npz "$selected_npz" \
-  --robot-json "$selected_robot" \
+  --robot-json "$OUTPUT_ROOT/initial_model/robot.json" \
   --rig "$OUTPUT_ROOT/initial_model/rig_keypoints.json" \
   --desired-control-motion "$OUTPUT_ROOT/control/target_control_keypoint_motion.json" \
   --projected-control-motion "$OUTPUT_ROOT/control/projected_control_keypoint_motion.json" \
@@ -274,5 +330,29 @@ cp "$OUTPUT_ROOT/motion/vgt_three_view.png" "$OUTPUT_ROOT/previews/"
 cp "$OUTPUT_ROOT/motion/vgt_isometric.png" "$OUTPUT_ROOT/previews/"
 cp "$OUTPUT_ROOT/motion/vgt_motion_30fps.mp4" "$OUTPUT_ROOT/previews/"
 
+mamba run -n biomimic python \
+  "${REPO_ROOT}/src/qianji_animal_motion/experiment_provenance.py" \
+  --repository-root "$REPO_ROOT" \
+  --qianji-root "$QIANJI_ROOT" \
+  --script "${REPO_ROOT}/experiments/39point_vgt_cat/run_experiment.sh" \
+  --script "${REPO_ROOT}/experiments/39point_vgt_cat/compare_candidates.py" \
+  --script "${REPO_ROOT}/experiments/39point_vgt_cat/verify_case.py" \
+  --script "${REPO_ROOT}/experiments/39point_vgt_cat/record_robot_conversion.py" \
+  --script "$GENERATOR" \
+  --script "$REACHABILITY" \
+  --script "$MORPHOLOGY" \
+  --script "$QIANJI_REACHABILITY_CORE" \
+  --script "$QIANJI_SLIDE_ADAPTER" \
+  --script "$QIANJI_XML_CONVERTER" \
+  --script "$QIANJI_SCENE_BUILDER" \
+  --output "$OUTPUT_ROOT/reports/experiment_provenance.json"
+
 "$PYTHON" "$REPO_ROOT/experiments/39point_vgt_cat/verify_case.py" "$OUTPUT_ROOT"
-printf 'Complete 39-point VGT case: %s\n' "$OUTPUT_ROOT"
+if [[ -e "$FINAL_OUTPUT_ROOT" ]]; then
+  printf 'OUTPUT_ROOT appeared during the run: %s\n' "$FINAL_OUTPUT_ROOT" >&2
+  exit 2
+fi
+mv "$CASE_STAGING_ROOT" "$FINAL_OUTPUT_ROOT"
+CASE_STAGING_ROOT=""
+trap - EXIT HUP INT TERM
+printf 'Complete 39-point VGT case: %s\n' "$FINAL_OUTPUT_ROOT"

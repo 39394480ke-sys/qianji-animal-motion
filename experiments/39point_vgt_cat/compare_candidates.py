@@ -11,6 +11,18 @@ from pathlib import Path
 from typing import Sequence
 
 from qianji_animal_motion.vgt_sequence import load_and_validate_vgt_sequence
+from qianji_animal_motion.vgt_sequence import (
+    compute_rod_constraint_metrics,
+    validate_control_pair_against_sequence,
+)
+from qianji_animal_motion.vgt_control import (
+    infer_uniform_contraction_fraction,
+)
+
+
+MAX_KEYPOINT_ERROR_M = 0.05
+MAX_EDGE_VIOLATION_M = 0.0005
+MAX_CLIPPED_FRACTION = 0.05
 
 
 def _reject_constant(value: str) -> None:
@@ -102,6 +114,14 @@ def _candidate_record(candidate_root: Path) -> dict:
             summary["max_keypoint_error_m"],
             "maximum keypoint error",
         )
+        max_edge_violation = _finite_number(
+            summary["max_edge_violation_m"],
+            "maximum edge violation",
+        )
+        max_clipped_fraction = _finite_number(
+            summary["max_estimated_clipped_fraction"],
+            "maximum estimated clipped fraction",
+        )
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("candidate reachability summary is malformed") from error
     if frames <= 0 or not isinstance(status_counts, dict):
@@ -129,12 +149,41 @@ def _candidate_record(candidate_root: Path) -> dict:
         projected.get("frames", ())
     ) != frames:
         raise ValueError("candidate control motion frame count differs")
+    try:
+        fps = float(desired["fps"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("candidate desired motion fps is malformed") from error
+    validate_control_pair_against_sequence(
+        desired,
+        projected,
+        sequence,
+        rig,
+        expected_frames=frames,
+        expected_fps=fps,
+    )
 
     motion_scale = _finite_number(parameters.get("motion_scale"), "motion scale")
-    contraction = _finite_number(
+    declared_contraction = _finite_number(
         parameters.get("contraction_fraction"),
         "contraction fraction",
     )
+    actual_contraction = infer_uniform_contraction_fraction(robot)
+    if not math.isclose(
+        declared_contraction,
+        actual_contraction,
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    ):
+        raise ValueError(
+            "candidate declared contraction does not match robot constraints"
+        )
+    extension_only = reachability.get("extension_only")
+    expected_extension_only = actual_contraction <= 1e-12
+    if extension_only is not expected_extension_only:
+        raise ValueError(
+            "reachability extension_only disagrees with robot contraction"
+        )
+    geometry = compute_rod_constraint_metrics(sequence, robot)
     rig_variant = parameters.get("rig_variant")
     morphology = parameters.get("morphology_variant")
     if not isinstance(rig_variant, str) or not isinstance(morphology, str):
@@ -144,8 +193,21 @@ def _candidate_record(candidate_root: Path) -> dict:
         failures.append("frame_count")
     if unreachable != 0:
         failures.append("unreachable_frames")
-    if max_error > 0.05:
+    if max_error > MAX_KEYPOINT_ERROR_M:
         failures.append("max_keypoint_error_above_0.05_m")
+    if max_edge_violation > MAX_EDGE_VIOLATION_M:
+        failures.append("max_edge_violation_above_0.0005_m")
+    if max_clipped_fraction > MAX_CLIPPED_FRACTION:
+        failures.append(
+            "max_estimated_clipped_fraction_above_0.05"
+        )
+    if geometry["max_edge_violation_m"] > MAX_EDGE_VIOLATION_M:
+        failures.append("recomputed_edge_violation_above_0.0005_m")
+    if (
+        geometry["max_violated_rod_fraction"]
+        > MAX_CLIPPED_FRACTION
+    ):
+        failures.append("recomputed_violated_rod_fraction_above_0.05")
     if sequence.positions.shape != (frames, 12, 3):
         failures.append("vgt_shape")
     hashes = {label: _sha256(path) for label, path in paths.items()}
@@ -155,10 +217,13 @@ def _candidate_record(candidate_root: Path) -> dict:
         "candidate_id": metadata.get("candidate_id", root.name),
         "candidate_root": str(root),
         "motion_scale": motion_scale,
-        "contraction_fraction": contraction,
+        "contraction_fraction": declared_contraction,
+        "actual_contraction_fraction": actual_contraction,
+        "extension_only": extension_only,
         "rig_variant": rig_variant,
         "morphology_variant": morphology,
         "summary": summary,
+        "recomputed_geometry": geometry,
         "eligible": not failures,
         "eligibility_failures": failures,
         "artifacts": {
@@ -216,11 +281,47 @@ def _group_comparison(candidates: list[dict], field: str) -> dict:
     return values
 
 
+def _case_relative(path: Path, case_root: Path) -> str:
+    try:
+        return path.resolve().relative_to(case_root.resolve()).as_posix()
+    except ValueError as error:
+        raise ValueError(
+            f"candidate artifact is outside the case root: {path}"
+        ) from error
+
+
+def _relativize_record(record: dict, case_root: Path) -> None:
+    record["candidate_root"] = _case_relative(
+        Path(record["candidate_root"]),
+        case_root,
+    )
+    for item in record["artifacts"].values():
+        item["path"] = _case_relative(Path(item["path"]), case_root)
+    morphology = record.get("morphology_report")
+    if isinstance(morphology, dict):
+        morphology["path"] = _case_relative(
+            Path(morphology["path"]),
+            case_root,
+        )
+
+
 def compare_candidates(candidate_roots: list[Path]) -> dict:
     """Validate all artifacts, aggregate parameters, and select one candidate."""
     if not candidate_roots:
         raise ValueError("at least one candidate root is required")
-    candidates = [_candidate_record(Path(root)) for root in candidate_roots]
+    roots = [Path(root).resolve() for root in candidate_roots]
+    candidate_parents = {root.parent for root in roots}
+    if (
+        len(candidate_parents) != 1
+        or next(iter(candidate_parents)).name != "candidates"
+    ):
+        raise ValueError(
+            "candidate roots must share one case-local candidates directory"
+        )
+    case_root = next(iter(candidate_parents)).parent
+    candidates = [_candidate_record(root) for root in roots]
+    for record in candidates:
+        _relativize_record(record, case_root)
     ids = [item["candidate_id"] for item in candidates]
     if len(set(ids)) != len(ids):
         raise ValueError("candidate IDs must be unique")
@@ -229,7 +330,10 @@ def compare_candidates(candidate_roots: list[Path]) -> dict:
         "schema_version": "0.1.0",
         "acceptance": {
             "unreachable_frames": 0,
-            "max_keypoint_error_m": 0.05,
+            "max_keypoint_error_m": MAX_KEYPOINT_ERROR_M,
+            "max_edge_violation_m": MAX_EDGE_VIOLATION_M,
+            "max_estimated_clipped_fraction": MAX_CLIPPED_FRACTION,
+            "max_recomputed_violated_rod_fraction": MAX_CLIPPED_FRACTION,
             "sites": 12,
             "rods": 30,
         },

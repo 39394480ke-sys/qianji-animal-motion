@@ -63,6 +63,15 @@ def _write_json(path: Path, payload: dict) -> None:
     )
 
 
+def _recorded_path(path: Path, case_root: Path | None) -> str:
+    if case_root is None:
+        return str(path)
+    try:
+        return path.relative_to(case_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def run_lift_39(
     *,
     trajectory_39_path: Path,
@@ -72,6 +81,7 @@ def run_lift_39(
     output_dir: Path,
     reference_frame: int = 152,
     motion_scale: float = 0.1,
+    case_root: Path | None = None,
 ) -> Lift39Paths:
     sources = {
         "trajectory_39": Path(trajectory_39_path).resolve(),
@@ -83,6 +93,13 @@ def run_lift_39(
         if not path.is_file():
             raise FileNotFoundError(f"{label} source does not exist: {path}")
     output_dir = Path(output_dir).resolve()
+    resolved_case_root = (
+        None if case_root is None else Path(case_root).resolve()
+    )
+    if resolved_case_root is not None and not resolved_case_root.is_dir():
+        raise FileNotFoundError(
+            f"case root does not exist: {resolved_case_root}"
+        )
     final = _paths(output_dir)
     for path in final:
         if path.exists():
@@ -92,6 +109,16 @@ def run_lift_39(
     hashes = {label: _sha256(path) for label, path in sources.items()}
     trajectory = _load_json(sources["trajectory_39"])
     corrected = _load_json(sources["corrected_spine"])
+    lineage = trajectory.get("source_lineage")
+    if (
+        not isinstance(lineage, dict)
+        or lineage.get("corrected_trajectory_sha256")
+        != hashes["corrected_spine"]
+    ):
+        raise ValueError(
+            "trajectory corrected_trajectory_sha256 does not match "
+            "the corrected spine source"
+        )
     robot = _load_json(sources["robot"])
     rig = _load_json(sources["rig"])
     neutral = build_neutral_landmarks_39(
@@ -102,7 +129,10 @@ def run_lift_39(
         reference_frame=reference_frame,
     )
     source_records = {
-        label: {"path": str(path), "sha256": hashes[label]}
+        label: {
+            "path": _recorded_path(path, resolved_case_root),
+            "sha256": hashes[label],
+        }
         for label, path in sources.items()
     }
     neutral = {**neutral, "sources": source_records}
@@ -144,6 +174,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reference-frame", type=int, default=152)
     parser.add_argument("--motion-scale", type=float, default=0.1)
+    parser.add_argument("--case-root", type=Path)
     return parser
 
 
@@ -157,6 +188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=args.output,
         reference_frame=args.reference_frame,
         motion_scale=args.motion_scale,
+        case_root=args.case_root,
     )
     for path in outputs:
         print(path)
