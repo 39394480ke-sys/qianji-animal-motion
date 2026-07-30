@@ -100,6 +100,7 @@ def build_provenance(
     qianji_root: Path,
     script_paths: Sequence[Path],
     package_names: Sequence[str] = DEFAULT_PACKAGES,
+    invocation: Sequence[str] | None = None,
 ) -> dict:
     """Build a deterministic provenance payload for one experiment run."""
     scripts = []
@@ -122,6 +123,10 @@ def build_provenance(
         "repository": _repository_state(Path(repository_root)),
         "qianji": _repository_state(Path(qianji_root)),
         "scripts": scripts,
+        "invocation": {
+            "argv": list(sys.argv if invocation is None else invocation),
+            "working_directory": os.getcwd(),
+        },
         "environment": {
             "conda_default_env": os.environ.get("CONDA_DEFAULT_ENV"),
             "conda_prefix": os.environ.get("CONDA_PREFIX"),
