@@ -71,7 +71,7 @@ def build_39point_observation(
 ) -> Observation39Result: ...
 ```
 
-- [ ] **Step 1: Write failing tests for exact role and frame preservation**
+- [x] **Step 1: Write failing tests for exact role and frame preservation**
 
 Build a two-frame real pandas MultiIndex fixture containing all literal
 `SUPERANIMAL_QUADRUPED_39` roles and three coordinates. Assert:
@@ -85,7 +85,7 @@ assert all(len(frame["keypoints"]) == 39 for frame in trajectory["frames"])
 
 The production change caught is dropping, reordering, or renaming an H5 role.
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 ```bash
 uv run --python 3.12 --with '.[dev]' \
@@ -94,14 +94,14 @@ uv run --python 3.12 --with '.[dev]' \
 
 Expected: collection fails because `keypoints_39` does not exist.
 
-- [ ] **Step 3: Implement schema validation and literal point export**
+- [x] **Step 3: Implement schema validation and literal point export**
 
 Validate one scorer, one requested individual, exactly the 39 expected
 bodyparts, `x/y/likelihood`, contiguous frame index, positive video metadata,
 finite source values, and threshold in `[0,1]`. Emit every role in every frame
 without interpolation.
 
-- [ ] **Step 4: Add failing quality-policy tests**
+- [x] **Step 4: Add failing quality-policy tests**
 
 Use literal points to assert:
 
@@ -115,14 +115,14 @@ Use literal points to assert:
 The production changes caught are accepting bad points, silently clipping
 coordinates, or omitting quality evidence.
 
-- [ ] **Step 5: Implement deterministic quality classification**
+- [x] **Step 5: Implement deterministic quality classification**
 
 Use finite raw coordinates for quality computation. Estimate per-frame torso
 scale from `back_end` to `back_base`, falling back only to the video diagonal
 for threshold calculation and recording that fallback. A temporal jump is
 compared only with the previous raw frame and never repaired.
 
-- [ ] **Step 6: Add failing complete-chain identity tests**
+- [x] **Step 6: Add failing complete-chain identity tests**
 
 Construct frames where the resolved front identity swaps. Assert that
 `front_left_thai`, `front_left_knee`, and `front_left_paw` all receive the raw
@@ -130,20 +130,20 @@ right-chain values, and the report records the frame once. Repeat for the rear
 chain. The production change caught is swapping only a paw or mixing joints
 from different legs.
 
-- [ ] **Step 7: Implement existing resolver integration**
+- [x] **Step 7: Implement existing resolver integration**
 
 Call `resolve_leg_identities(...)` independently for the complete front and
 rear three-joint chains. Apply the chosen state before quality classification.
 Record states, ambiguous frames, and confirmed anchor semantics.
 
-- [ ] **Step 8: Run focused and full tests**
+- [x] **Step 8: Run focused and full tests**
 
 ```bash
 uv run --python 3.12 --with '.[dev]' python -m pytest tests/test_keypoints_39.py -q
 uv run --python 3.12 --with '.[dev]' python -m pytest -q
 ```
 
-- [ ] **Step 9: Commit the observation core**
+- [x] **Step 9: Commit the observation core**
 
 ```bash
 git add src/qianji_animal_motion/keypoints_39.py tests/test_keypoints_39.py
@@ -170,7 +170,7 @@ git commit -m "feat: export complete 39-point observations"
 qianji-export-39-keypoints = "qianji_animal_motion.keypoints_39_cli:main"
 ```
 
-- [ ] **Step 1: Write a failing real-file orchestration test**
+- [x] **Step 1: Write a failing real-file orchestration test**
 
 Create a two-frame H5 with all 39 roles and a two-frame 100x80 MP4. Create
 small mesh and corrected-spine JSON files. Call:
@@ -190,37 +190,37 @@ run_observation_export(
 Assert four complete outputs, exact source SHA-256 values, declared Hunyuan3D
 provenance, two preview frames, and refusal to overwrite.
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Expected: import failure for `keypoints_39_cli`.
 
-- [ ] **Step 3: Implement source hashing, staged publication, and manifest**
+- [x] **Step 3: Implement source hashing, staged publication, and manifest**
 
 The manifest includes absolute paths and SHA-256 for video, H5, mesh, corrected
 spine, plus reference frame, video metadata, H5 scorer/individual/bodyparts,
 mesh generation method, and the four false scientific flags. Re-hash all
 sources immediately before atomic publication.
 
-- [ ] **Step 4: Add a failing preview test**
+- [x] **Step 4: Add a failing preview test**
 
 Open the published MP4 with OpenCV and assert width 100, height 80, FPS 30,
 two frames, and non-background colored pixels at a known valid point. The
 production change caught is writing an empty, wrong-rate, or unannotated file.
 
-- [ ] **Step 5: Implement 39-point preview rendering**
+- [x] **Step 5: Implement 39-point preview rendering**
 
 Draw valid points by anatomical group, draw only edges whose endpoints are
 valid, render a compact invalid-count overlay, and preserve the source frame
 size and FPS. Check that the writer emitted exactly the trajectory frame
 count.
 
-- [ ] **Step 6: Add CLI arguments and package test**
+- [x] **Step 6: Add CLI arguments and package test**
 
 Support `--video`, `--predictions`, `--mesh`, `--corrected-spine`, `--output`,
 `--reference-frame`, `--individual`, `--confidence-threshold`, and
 `--mesh-generation-method`.
 
-- [ ] **Step 7: Run focused/full tests and commit**
+- [x] **Step 7: Run focused/full tests and commit**
 
 ```bash
 uv run --python 3.12 --with '.[dev]' python -m pytest \
@@ -269,7 +269,7 @@ def lift_39point_trajectory(
 ) -> Lift39Result: ...
 ```
 
-- [ ] **Step 1: Write failing neutral-frame tests**
+- [x] **Step 1: Write failing neutral-frame tests**
 
 Use a literal six-site rig embedded in a 12-site robot and 39 reference points.
 Assert:
@@ -281,11 +281,11 @@ Assert:
 - antler roles are present with `anatomy_applicable: false`;
 - source hashes and reference confidence fields are represented.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Expected: missing `lift_39` import.
 
-- [ ] **Step 3: Implement neutral construction**
+- [x] **Step 3: Implement neutral construction**
 
 Reuse `neutral_pose_from_rig` for the six rig roles and the existing 3D basis
 convention. Derive each landmark's reference longitudinal/vertical coordinate
@@ -293,7 +293,7 @@ from the raw finite frame-152 H5 position and corrected spine body frame.
 Derive lateral sign from semantic side and lateral magnitude from the rig
 left/right width.
 
-- [ ] **Step 4: Add failing lift tests**
+- [x] **Step 4: Add failing lift tests**
 
 Assert:
 
@@ -305,7 +305,7 @@ Assert:
 - every frame contains all 39 roles;
 - report substitutions are explicit and no interpolation field exists.
 
-- [ ] **Step 5: Implement 39-point body-relative lift**
+- [x] **Step 5: Implement 39-point body-relative lift**
 
 Use the corrected six-point spine per frame for the body frame and the same
 equation as the approved design. Reject missing/invalid spine frames rather
@@ -316,19 +316,19 @@ schema: qianji-keypoint-trajectory-39-v1
 reconstruction_kind: body_relative_2_5d_retarget
 ```
 
-- [ ] **Step 6: Write failing atomic CLI tests**
+- [x] **Step 6: Write failing atomic CLI tests**
 
 Test source-hash provenance, non-overwrite, malformed role rejection, source
 mutation rejection, `allow_nan=False`, and complete publication of
 `neutral_landmarks_39.json`, `keypoint_motion_3d_39.json`, and
 `lift_39_report.json`.
 
-- [ ] **Step 7: Implement and package `qianji-lift-39-keypoints`**
+- [x] **Step 7: Implement and package `qianji-lift-39-keypoints`**
 
 Arguments: `--trajectory-39`, `--corrected-spine`, `--robot-json`, `--rig`,
 `--output`, `--reference-frame`, and `--motion-scale`.
 
-- [ ] **Step 8: Run tests and commit**
+- [x] **Step 8: Run tests and commit**
 
 ```bash
 uv run --python 3.12 --with '.[dev]' python -m pytest tests/test_lift_39.py -q
@@ -374,50 +374,50 @@ def build_motion_informed_rig(
 def apply_contraction_range(robot: dict, fraction: float) -> dict: ...
 ```
 
-- [ ] **Step 1: Write failing reference and fallback tests**
+- [x] **Step 1: Write failing reference and fallback tests**
 
 Assert that each control role names its observation primary/fallback and rig
 site, all six sites are distinct, the reference target equals the rig neutral
 XYZ, and an invalid primary uses only its named same-frame fallback while
 recording it.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Expected: missing `vgt_control` import.
 
-- [ ] **Step 3: Implement the explicit observation/control boundary**
+- [x] **Step 3: Implement the explicit observation/control boundary**
 
 Use the six mappings from the design. Apply observation displacement relative
 to neutral landmark to the mapped site neutral. Emit
 `qianji-keypoint-trajectory-v1` for QianJi and a report with every fallback or
 neutral substitution.
 
-- [ ] **Step 4: Add failing motion-informed rig tests**
+- [x] **Step 4: Add failing motion-informed rig tests**
 
 With literal site positions, assert nearest semantic assignment selects six
 distinct existing sites and rejects robots with fewer than six sites. The
 expected site IDs are hand-derived in the fixture.
 
-- [ ] **Step 5: Implement deterministic distinct-site assignment**
+- [x] **Step 5: Implement deterministic distinct-site assignment**
 
 Build a role-to-site distance matrix and choose the minimum total distinct
 assignment using exhaustive permutations over the nearest bounded candidates
 for the six roles. Tie-break lexicographically by site tuple.
 
-- [ ] **Step 6: Add failing contraction tests**
+- [x] **Step 6: Add failing contraction tests**
 
 For fraction `0.10`, assert every copied rod's
 `effective_min_length == 0.9 * effective_current_length`, maximum and current
 length are unchanged, mode names the experiment, the source robot is
 unchanged, and fractions outside `[0,0.5]` fail.
 
-- [ ] **Step 7: Implement candidate CLI**
+- [x] **Step 7: Implement candidate CLI**
 
 `qianji-prepare-vgt-control` writes versioned bbox/motion-informed rigs,
 control maps, target motions, and contraction-adjusted robot copies. It never
 modifies QianJi or input files.
 
-- [ ] **Step 8: Run tests and commit**
+- [x] **Step 8: Run tests and commit**
 
 ```bash
 uv run --python 3.12 --with '.[dev]' python -m pytest tests/test_vgt_control.py -q
@@ -462,25 +462,25 @@ def package_vgt_sequence(...) -> dict: ...
 def render_vgt_motion(...) -> dict: ...
 ```
 
-- [ ] **Step 1: Write failing NPZ and rod-contract tests**
+- [x] **Step 1: Write failing NPZ and rod-contract tests**
 
 Use three frames, 12 sites, 30 literal valid rods. Assert accepted shape
 `(3,12,3)`, strictly increasing times, exact site order, and 30 endpoint
 pairs. Independently test rejection of NaN, duplicate site names, missing rod
 endpoints, wrong frame/site dimensions, and non-monotonic time.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Expected: missing `vgt_sequence` import.
 
-- [ ] **Step 3: Implement validated packaging**
+- [x] **Step 3: Implement validated packaging**
 
 Copy arrays by value, write compressed NPZ, hash it, and emit a manifest
 containing selected candidate, exact shapes, time range, FPS, sites, rods,
 robot/rig hashes, desired target path/hash, projected path/hash, and the four
 scientific false flags.
 
-- [ ] **Step 4: Add failing renderer tests**
+- [x] **Step 4: Add failing renderer tests**
 
 Render a two-frame 12-site motion with a known moving node. Assert:
 
@@ -489,20 +489,20 @@ Render a two-frame 12-site motion with a known moving node. Assert:
 - first and second decoded frames differ;
 - all four view panels contain non-background pixels.
 
-- [ ] **Step 5: Implement OpenCV structure rendering**
+- [x] **Step 5: Implement OpenCV structure rendering**
 
 Use fixed axis bounds over all frames. Draw 30 anti-aliased rod segments and
 12 stable-size site circles in top XY, side XZ, front YZ, and isometric
 projection. Use labels only in static images, not the animation. Refuse an
 empty or partially written video.
 
-- [ ] **Step 6: Package `qianji-package-vgt-motion`**
+- [x] **Step 6: Package `qianji-package-vgt-motion`**
 
 Arguments include QianJi site NPZ, robot, rig, desired control motion,
 projected control motion, selected candidate JSON, output root, width, height,
 and FPS.
 
-- [ ] **Step 7: Run tests and commit**
+- [x] **Step 7: Run tests and commit**
 
 ```bash
 uv run --python 3.12 --with '.[dev]' python -m pytest tests/test_vgt_sequence.py -q
@@ -531,7 +531,7 @@ def select_candidate(report: dict) -> dict: ...
 def verify_case(case_root: Path) -> dict: ...
 ```
 
-- [ ] **Step 1: Write failing candidate selection tests**
+- [x] **Step 1: Write failing candidate selection tests**
 
 Use literal summaries to prove:
 
@@ -542,7 +542,7 @@ Use literal summaries to prove:
 - contraction, rig, and morphology parameters survive into the aggregate
   report.
 
-- [ ] **Step 2: Implement aggregate reachability report**
+- [x] **Step 2: Implement aggregate reachability report**
 
 Load each QianJi `run_summary.json`, `reachability_report.json`, robot, rig,
 target motion, projected motion, and site NPZ. Validate hashes and dimensions.
@@ -550,21 +550,21 @@ Emit candidate table, selection rationale, contraction comparison, rig
 comparison, morphology before/after comparison, and explicit eligibility
 failures.
 
-- [ ] **Step 3: Write failing full-case verifier tests**
+- [x] **Step 3: Write failing full-case verifier tests**
 
 Create a complete small synthetic case and mutate one requirement at a time:
 missing role, NaN NPZ, 29 rods, mismatched hashes, desired/projected path
 aliasing, wrong video FPS, wrong video frame count, missing limitation, and
 partial output. Each mutation must make `passed: false` with a named check.
 
-- [ ] **Step 4: Implement verifier**
+- [x] **Step 4: Implement verifier**
 
 The verifier checks all 12 requested deliverables and every acceptance gate.
 It writes `reports/final_acceptance_report.json` with `passed`, timestamp,
 source hashes, output hashes, individual checks, exact commands, and no
 ambiguous skipped status.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 ```bash
 uv run --python 3.12 --with '.[dev]' python -m pytest \
@@ -590,24 +590,24 @@ git commit -m "feat: verify complete 39-point VGT cases"
 - Consumes `ANIMAL_DATA_ROOT`, `QIANJI_ROOT`, and a new `OUTPUT_ROOT`.
 - Produces the complete versioned case directory from the design.
 
-- [ ] **Step 1: Write shell preflight and exact source paths**
+- [x] **Step 1: Write shell preflight and exact source paths**
 
 Require the real video, H5, GLB, corrected six trajectory, local installed
 commands, QianJi generator, reachability checker, and morphology optimizer.
 Reject an existing output root before creating any directory.
 
-- [ ] **Step 2: Export real observation and initial model**
+- [x] **Step 2: Export real observation and initial model**
 
 Run `qianji-export-39-keypoints`; generate the abstract 12-site/30-rod QianJi
 robot from the real GLB; generate bbox rig; validate exact counts.
 
-- [ ] **Step 3: Generate scale-specific 39-point and control artifacts**
+- [x] **Step 3: Generate scale-specific 39-point and control artifacts**
 
 Create isolated lift/control directories for scales `0.05`, `0.10`, and
 `0.15`. Prepare bbox/motion-informed rigs and zero/10-percent contraction
 robots without overwriting any source.
 
-- [ ] **Step 4: Run the bounded candidate matrix**
+- [x] **Step 4: Run the bounded candidate matrix**
 
 Run:
 
@@ -624,20 +624,20 @@ The morphology candidate uses QianJi
 `controller/optimize_morphology_for_motion.py`; all others use
 `controller/check_keypoint_reachability.py`.
 
-- [ ] **Step 5: Compare, select, and publish final artifacts**
+- [x] **Step 5: Compare, select, and publish final artifacts**
 
 Generate aggregate `reports/reachability_report.json`; copy the selected
 scale's `neutral_landmarks_39.json` and `keypoint_motion_3d_39.json`; publish
 selected control map, desired target, projected target, robot, rig, and VGT
 sequence through package commands rather than ambiguous manual renaming.
 
-- [ ] **Step 6: Render and run acceptance verifier**
+- [x] **Step 6: Render and run acceptance verifier**
 
 Produce 30 FPS 272-frame previews and
 `reports/final_acceptance_report.json`. The script exits nonzero unless
 `passed` is true.
 
-- [ ] **Step 7: Execute the real experiment**
+- [x] **Step 7: Execute the real experiment**
 
 ```bash
 ANIMAL_DATA_ROOT="/absolute/main/animal-motion" \
@@ -646,13 +646,13 @@ OUTPUT_ROOT="$PWD/outputs/experiments/39point_vgt_cat_v1" \
 bash experiments/39point_vgt_cat/run_experiment.sh
 ```
 
-- [ ] **Step 8: Inspect visual and quantitative evidence**
+- [x] **Step 8: Inspect visual and quantitative evidence**
 
 View the 2D preview, VGT three-view PNG, isometric PNG, and representative
 frames from the MP4. Confirm no blank panel, incoherent rod, role loss, or
 frame mismatch. Read the aggregate and final acceptance reports.
 
-- [ ] **Step 9: Commit reproducibility files**
+- [x] **Step 9: Commit reproducibility files**
 
 ```bash
 git add experiments/39point_vgt_cat/run_experiment.sh \
@@ -671,19 +671,19 @@ git commit -m "exp: add reproducible 39-point cat VGT pipeline"
 - Modify:
   `docs/superpowers/plans/2026-07-30-39point-vgt-motion-pipeline.md`
 
-- [ ] **Step 1: Document the exact pipeline and scientific boundary**
+- [x] **Step 1: Document the exact pipeline and scientific boundary**
 
 Explain Hunyuan3D mesh provenance, 39-point observation, neutral landmarks,
 2.5D equation, observation/control separation, VGT sequence, desired versus
 projected targets, and why no depth/dynamics claim is made.
 
-- [ ] **Step 2: Document every schema and command**
+- [x] **Step 2: Document every schema and command**
 
 List all required fields for the input manifest, 2D trajectory, neutral
 landmarks, 39-point motion, control map, VGT NPZ/manifest, reachability report,
 and acceptance report. Include the one-command real-case invocation.
 
-- [ ] **Step 3: Run fresh final verification**
+- [x] **Step 3: Run fresh final verification**
 
 ```bash
 uv run --python 3.12 --with '.[dev]' python -m pytest -q
@@ -697,14 +697,14 @@ git diff --check
 git status --short --branch
 ```
 
-- [ ] **Step 4: Audit every explicit acceptance requirement**
+- [x] **Step 4: Audit every explicit acceptance requirement**
 
 Record authoritative values in this plan: test count; 2D/3D frame and role
 counts; NPZ shape; sites/rods; desired/projected distinct hashes; video FPS,
 frames, dimensions and size; reachability status/error; NaN scan; output
 hashes; branch and clean status.
 
-- [ ] **Step 5: Commit documentation and verification record**
+- [x] **Step 5: Commit documentation and verification record**
 
 ```bash
 git add README.md docs/data_contract.md docs/39point_vgt_motion_pipeline.md \
@@ -712,7 +712,7 @@ git add README.md docs/data_contract.md docs/39point_vgt_motion_pipeline.md \
 git commit -m "docs: complete 39-point VGT pipeline record"
 ```
 
-- [ ] **Step 6: Confirm clean final state**
+- [x] **Step 6: Confirm clean final state**
 
 ```bash
 git status --short --branch
@@ -720,3 +720,34 @@ git log --oneline --decorate -12
 ```
 
 Only after every check is evidenced may the active goal be marked complete.
+
+## Final Audit Record
+
+Authoritative real-case evidence was generated at
+`outputs/experiments/39point_vgt_cat_v3` on branch
+`experiment/39point-vgt-motion-pipeline`.
+
+| Acceptance item | Verified value |
+| --- | --- |
+| Python tests | 124 passed |
+| 2D observation | 272 frames x 39 ordered roles |
+| 3D keypoint motion | 272 frames x 39 ordered roles |
+| Reconstruction label | `body_relative_2_5d_retarget` |
+| Interpolation/smoothing | both false |
+| VGT array | finite `(272, 12, 3)` |
+| Robot topology | 12 sites, 30 rods, valid endpoints |
+| Selected candidate | `scale_010_motion_informed_base_c010` |
+| Reachability status | 266 feasible, 6 marginal, 0 unreachable |
+| Maximum control error | 0.0160906954 m |
+| Maximum rod violation | 0.0002824917 m |
+| Desired target SHA-256 | `1837a84743f8c6f84f75fce993ac6331280542eeabd463f6c01b960c316d3cdf` |
+| Projected target SHA-256 | `f6e16910186690a82712a9b114abaeb3f1546aac8f7be7e551864ad73ae93d05` |
+| VGT NPZ SHA-256 | `22313aabfaa343980e3a71350219bbee1c00578d3d78848ad6ef7a0d492a5177` |
+| VGT video | 1246x720, 30 FPS, 272 frames, 6,451,123 bytes |
+| Observation preview | 1246x720, 30 FPS, 272 frames, 5,692,851 bytes |
+| Final verifier | all 13 named checks passed |
+
+The selected candidate improves the prior bbox/no-contraction scale-0.10
+result from 11 unreachable frames and 0.74% feasible frames to zero
+unreachable and 97.79% feasible frames. The six remaining marginal frames are
+reported as geometric reachability evidence, not a dynamics or gait claim.
