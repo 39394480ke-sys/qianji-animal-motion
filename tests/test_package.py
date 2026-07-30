@@ -28,4 +28,7 @@ def test_all_pipeline_commands_are_packaged() -> None:
         "qianji-prepare-vgt-control": (
             "qianji_animal_motion.vgt_control_cli:main"
         ),
+        "qianji-package-vgt-motion": (
+            "qianji_animal_motion.vgt_sequence_cli:main"
+        ),
     }
