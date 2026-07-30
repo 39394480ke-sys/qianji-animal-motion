@@ -6,6 +6,18 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_39point_experiment_uses_the_verified_frozen_12x30_robot() -> None:
+    script = (
+        REPOSITORY_ROOT / "experiments/39point_vgt_cat/run_experiment.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "qianji_animal_motion.frozen_initial_robot" in script
+    assert "cat_hunyuan_qianji_robot_12x30.json" in script
+    assert "cat_hunyuan_qianji_robot_12x30.manifest.json" in script
+    assert 'cp "$OUTPUT_ROOT/initial_model/robot_base.json"' in script
+    assert '"$GENERATOR" 3d-mesh' not in script
+
+
 def test_2d_experiment_failure_does_not_publish_partial_case(
     tmp_path: Path,
 ) -> None:

@@ -649,6 +649,33 @@ def _build_complete_case(root: Path) -> None:
         },
     }
     _write_json(root / "initial_model" / "robot_base.json", robot)
+    _write_json(
+        root / "initial_model" / "base_robot_manifest.json",
+        {
+            "schema": "qianji.initial_vgt_model",
+            "schema_version": "1.0.0",
+            "source_mesh": {
+                "path": str(mesh_path),
+                "sha256": _sha(mesh_path),
+            },
+            "template": {
+                "sha256": _sha(root / "initial_model" / "robot_base.json"),
+            },
+            "qianji_generation": {
+                "repository_commit": "3" * 40,
+                "entrypoint": "morph_generator/generate.py",
+                "parameters": {"preset": "abstract", "seed": 4},
+            },
+            "artifact": {
+                "path": "initial_model/robot_base.json",
+                "sha256": _sha(root / "initial_model" / "robot_base.json"),
+                "sites": 12,
+                "rods": 30,
+            },
+            "frozen_precomputed_from_mesh": True,
+            "reason": "fixture",
+        },
+    )
     _write_json(root / "initial_model" / "robot.json", robot)
     _write_json(root / "initial_model" / "rig_bbox.json", rig)
     _write_json(root / "initial_model" / "rig_keypoints.json", rig)
@@ -1206,6 +1233,22 @@ def test_verifier_rejects_canonical_robot_hash_mismatch(
 
     assert report["passed"] is False
     assert report["checks"]["robot_12_sites_30_rods"]["passed"] is False
+
+
+def test_verifier_rejects_base_robot_that_is_not_linked_to_the_input_mesh(
+    tmp_path: Path,
+) -> None:
+    case = tmp_path / "base_lineage"
+    _build_complete_case(case)
+    manifest_path = case / "initial_model" / "base_robot_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["source_mesh"]["sha256"] = "0" * 64
+    _write_json(manifest_path, manifest)
+
+    report = verify_case(case)
+
+    assert report["passed"] is False
+    assert report["checks"]["initial_vgt_lineage"]["passed"] is False
 
 
 def test_verifier_rejects_xml_generated_from_a_different_robot(

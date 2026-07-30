@@ -1,0 +1,26 @@
+{
+  "schema": "qianji.frozen_mesh_vgt_template",
+  "schema_version": "1.0.0",
+  "source_mesh": {
+    "sha256": "8704460d98d1e705668be694c42b57d65095c57c0276a1606df6f9ac13551cf3",
+    "generation_method": "hunyuan3d_from_video_frame_then_assimp_glb"
+  },
+  "template": {
+    "sha256": "74595b7a5a2b293959ccb89f495c77c1530974a06539bbc950ef3fd76bea0b4c",
+    "sites": 12,
+    "rods": 30
+  },
+  "qianji_generation": {
+    "repository_commit": "3f3676c6cb7c198f7c9c43ce0b002f61d3d524a8",
+    "entrypoint": "morph_generator/generate.py 3d-mesh",
+    "parameters": {
+      "preset": "abstract",
+      "max_node_degree": 8,
+      "seed": 4,
+      "target_height_m": 1.2,
+      "mesh_voxel_pitch_m": 0.12,
+      "mesh_projection_resolution": 80,
+      "max_nodes": 12
+    }
+  }
+}

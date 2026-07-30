@@ -21,6 +21,8 @@ QIANJI_REACHABILITY_CORE="${QIANJI_ROOT}/controller/reachability.py"
 QIANJI_SLIDE_ADAPTER="${QIANJI_ROOT}/controller/slide_control_adapter.py"
 QIANJI_XML_CONVERTER="${QIANJI_ROOT}/mujoco_builder/json2xml_v7_perrod.py"
 QIANJI_SCENE_BUILDER="${QIANJI_ROOT}/mujoco_builder/add_scene_to_xml.py"
+FROZEN_ROBOT="${REPO_ROOT}/experiments/39point_vgt_cat/fixtures/cat_hunyuan_qianji_robot_12x30.json"
+FROZEN_ROBOT_MANIFEST="${REPO_ROOT}/experiments/39point_vgt_cat/fixtures/cat_hunyuan_qianji_robot_12x30.manifest.json"
 
 for command in git mamba jq ffmpeg ffprobe; do
   if ! command -v "$command" >/dev/null 2>&1; then
@@ -32,6 +34,7 @@ done
 for source in \
   "$VIDEO" "$PREDICTIONS" "$MESH" "$CORRECTED" \
   "$PYTHON" \
+  "$FROZEN_ROBOT" "$FROZEN_ROBOT_MANIFEST" \
   "$GENERATOR" "$REACHABILITY" "$MORPHOLOGY" \
   "$QIANJI_REACHABILITY_CORE" "$QIANJI_SLIDE_ADAPTER" \
   "$QIANJI_XML_CONVERTER" "$QIANJI_SCENE_BUILDER"; do
@@ -90,13 +93,22 @@ mkdir -p \
   --confidence-threshold 0.30 \
   --mesh-generation-method hunyuan3d_from_video_frame
 
+"$PYTHON" -m qianji_animal_motion.frozen_initial_robot \
+  --mesh "$MESH" \
+  --template "$FROZEN_ROBOT" \
+  --template-manifest "$FROZEN_ROBOT_MANIFEST" \
+  --output-dir "$OUTPUT_ROOT/initial_model"
+cp "$OUTPUT_ROOT/initial_model/robot_base.json" \
+  "$OUTPUT_ROOT/initial_model/robot.json"
 (
   cd "$QIANJI_ROOT"
-  mamba run -n biomimic python "$GENERATOR" 3d-mesh \
-    --mesh "$MESH" \
-    --preset abstract \
-    --name animal_motion_cat_39point \
-    --output-dir "$OUTPUT_ROOT/initial_model"
+  mamba run -n biomimic python "$QIANJI_XML_CONVERTER" \
+    -i "$OUTPUT_ROOT/initial_model/robot.json" \
+    -o "$OUTPUT_ROOT/initial_model/robot.xml" \
+    --model-name animal_motion_cat_39point_base
+  mamba run -n biomimic python "$QIANJI_SCENE_BUILDER" \
+    --input "$OUTPUT_ROOT/initial_model/robot.xml" \
+    --output "$OUTPUT_ROOT/initial_model/robot_scene.xml"
   mamba run -n biomimic python "$REACHABILITY" \
     --robot-json "$OUTPUT_ROOT/initial_model/robot.json" \
     --auto-rig quadruped_bbox \
@@ -104,8 +116,6 @@ mkdir -p \
 )
 cp "$OUTPUT_ROOT/initial_model/bbox_seed/rig_keypoints.json" \
   "$OUTPUT_ROOT/initial_model/rig_bbox.json"
-cp "$OUTPUT_ROOT/initial_model/robot.json" \
-  "$OUTPUT_ROOT/initial_model/robot_base.json"
 cp "$OUTPUT_ROOT/initial_model/robot.xml" \
   "$OUTPUT_ROOT/initial_model/robot_base.xml"
 cp "$OUTPUT_ROOT/initial_model/robot_scene.xml" \
@@ -338,6 +348,7 @@ mamba run -n biomimic python \
   --script "${REPO_ROOT}/experiments/39point_vgt_cat/compare_candidates.py" \
   --script "${REPO_ROOT}/experiments/39point_vgt_cat/verify_case.py" \
   --script "${REPO_ROOT}/experiments/39point_vgt_cat/record_robot_conversion.py" \
+  --script "${REPO_ROOT}/src/qianji_animal_motion/frozen_initial_robot.py" \
   --script "$GENERATOR" \
   --script "$REACHABILITY" \
   --script "$MORPHOLOGY" \

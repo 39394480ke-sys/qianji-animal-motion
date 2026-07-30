@@ -50,6 +50,7 @@ REQUIRED_FILES = (
     "observation/keypoint_39_quality_report.json",
     "observation/keypoint_39_preview.mp4",
     "initial_model/robot_base.json",
+    "initial_model/base_robot_manifest.json",
     "initial_model/robot.json",
     "initial_model/robot.xml",
     "initial_model/robot_scene.xml",
@@ -305,6 +306,73 @@ def verify_case(case_root: Path) -> dict:
         return {"verified_source_hashes": len(source_paths)}
 
     _check_record(checks, "input_manifest_and_hashes", input_sources)
+
+    def initial_vgt_lineage() -> dict:
+        lineage = payload("initial_model/base_robot_manifest.json")
+        if (
+            lineage.get("schema") != "qianji.initial_vgt_model"
+            or lineage.get("schema_version") != "1.0.0"
+            or lineage.get("frozen_precomputed_from_mesh") is not True
+            or not isinstance(lineage.get("reason"), str)
+            or not lineage["reason"]
+        ):
+            raise ValueError("initial VGT lineage header is invalid")
+        source_mesh = _verified_record(
+            root,
+            lineage.get("source_mesh"),
+            "initial VGT source Mesh",
+            require_relative=False,
+        )
+        expected_mesh = source_paths.get("mesh")
+        if expected_mesh is None:
+            expected_mesh = _verified_record(
+                root,
+                payload("input_manifest.json").get("sources", {}).get("mesh"),
+                "input Mesh",
+                require_relative=False,
+            )
+        if source_mesh != expected_mesh:
+            raise ValueError("initial VGT does not name the input Mesh")
+        artifact = lineage.get("artifact")
+        artifact_path = _verified_record(
+            root,
+            artifact,
+            "initial VGT base robot",
+            require_relative=True,
+        )
+        expected_robot = (root / "initial_model/robot_base.json").resolve()
+        if (
+            artifact_path != expected_robot
+            or artifact.get("path") != "initial_model/robot_base.json"
+            or artifact.get("sites") != EXPECTED_SITES
+            or artifact.get("rods") != EXPECTED_RODS
+        ):
+            raise ValueError("initial VGT artifact contract is invalid")
+        template = lineage.get("template")
+        if (
+            not isinstance(template, dict)
+            or template.get("sha256") != artifact.get("sha256")
+        ):
+            raise ValueError("initial VGT template hash differs from artifact")
+        generation = lineage.get("qianji_generation")
+        if (
+            not isinstance(generation, dict)
+            or not isinstance(generation.get("repository_commit"), str)
+            or len(generation["repository_commit"]) != 40
+            or not isinstance(generation.get("entrypoint"), str)
+            or not generation["entrypoint"]
+            or not isinstance(generation.get("parameters"), dict)
+        ):
+            raise ValueError("initial VGT QianJi generation record is incomplete")
+        return {
+            "source_mesh_sha256": lineage["source_mesh"]["sha256"],
+            "robot_sha256": artifact["sha256"],
+            "qianji_generation_commit": generation["repository_commit"],
+            "sites": artifact["sites"],
+            "rods": artifact["rods"],
+        }
+
+    _check_record(checks, "initial_vgt_lineage", initial_vgt_lineage)
 
     observation: dict | None = None
 

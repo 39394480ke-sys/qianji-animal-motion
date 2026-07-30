@@ -1,0 +1,940 @@
+{
+  "schema_version": "animal_3d_tetra_truss_v1",
+  "name": "animal_3d_tetra_truss",
+  "port_offset": 0.01482570740302128,
+  "sites": {
+    "s000": {
+      "pos": [
+        1.0600518935784977,
+        -0.14239501699198345,
+        1.1019547941485612
+      ],
+      "kind": "boundary",
+      "layer": "mesh_surface",
+      "radius": 0.018
+    },
+    "s001": {
+      "pos": [
+        -1.23250756327173,
+        0.027249608054031354,
+        0.723487513795817
+      ],
+      "kind": "boundary",
+      "layer": "mesh_surface",
+      "radius": 0.018
+    },
+    "s002": {
+      "pos": [
+        0.03595198779789938,
+        -0.0760504388874805,
+        0.13049881555995227
+      ],
+      "kind": "boundary",
+      "layer": "mesh_surface",
+      "radius": 0.018
+    },
+    "s003": {
+      "pos": [
+        -0.25142139584270096,
+        0.04261113893741098,
+        1.1663910435828562
+      ],
+      "kind": "boundary",
+      "layer": "mesh_surface",
+      "radius": 0.018
+    },
+    "s004": {
+      "pos": [
+        0.9525183687360388,
+        0.15054717917349217,
+        0.1535134196405288
+      ],
+      "kind": "boundary",
+      "layer": "mesh_surface",
+      "radius": 0.018
+    },
+    "s005": {
+      "pos": [
+        -0.7059584876587396,
+        0.12837774107301192,
+        0.14055419535715608
+      ],
+      "kind": "boundary",
+      "layer": "mesh_surface",
+      "radius": 0.018
+    },
+    "s006": {
+      "pos": [
+        0.45895239229236806,
+        0.19782823849051012,
+        0.7931772633430448
+      ],
+      "kind": "boundary",
+      "layer": "mesh_surface",
+      "radius": 0.018
+    },
+    "s007": {
+      "pos": [
+        -0.3372811896423444,
+        -0.11462805625166354,
+        0.6035686130228846
+      ],
+      "kind": "boundary",
+      "layer": "mesh_surface",
+      "radius": 0.018
+    },
+    "s008": {
+      "pos": [
+        -0.3599999999999999,
+        0.0,
+        0.96
+      ],
+      "kind": "interior",
+      "layer": "mesh_voxel",
+      "radius": 0.018
+    },
+    "s009": {
+      "pos": [
+        0.96,
+        0.0,
+        1.08
+      ],
+      "kind": "interior",
+      "layer": "mesh_voxel",
+      "radius": 0.018
+    },
+    "s010": {
+      "pos": [
+        0.3600000000000001,
+        0.12,
+        0.84
+      ],
+      "kind": "interior",
+      "layer": "mesh_voxel",
+      "radius": 0.018
+    },
+    "s011": {
+      "pos": [
+        0.1200000000000001,
+        0.0,
+        0.96
+      ],
+      "kind": "skeleton",
+      "layer": "mesh_medial",
+      "radius": 0.018
+    }
+  },
+  "rod_groups": [
+    {
+      "name": "r0000_s000_s002",
+      "site1": "s000",
+      "site2": "s002",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.6917344348352823,
+      "rod_len_right": 0.6917344348352823,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.413120284476607,
+        "effective_current_length": 1.3834688696705646,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.3834688696705646,
+        "effective_max_length": 2.019864549719024,
+        "slide_range_each_side_required": 0.3181978400242298
+      }
+    },
+    {
+      "name": "r0001_s000_s003",
+      "site1": "s000",
+      "site2": "s003",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.6481866410563022,
+      "rod_len_right": 0.6481866410563022,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.3260246969186469,
+        "effective_current_length": 1.2963732821126044,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.2963732821126044,
+        "effective_max_length": 1.8927049918844023,
+        "slide_range_each_side_required": 0.298165854885899
+      }
+    },
+    {
+      "name": "r0002_s000_s007",
+      "site1": "s000",
+      "site2": "s007",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.7270805425890609,
+      "rod_len_right": 0.7270805425890609,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.4838124999841642,
+        "effective_current_length": 1.4541610851781217,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.4541610851781217,
+        "effective_max_length": 2.1230751843600575,
+        "slide_range_each_side_required": 0.3344570495909679
+      }
+    },
+    {
+      "name": "r0003_s000_s010",
+      "site1": "s000",
+      "site2": "s010",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.3812627021795107,
+      "rod_len_right": 0.3812627021795107,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.792176819165064,
+        "effective_current_length": 0.7625254043590214,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.7625254043590214,
+        "effective_max_length": 1.1132870903641712,
+        "slide_range_each_side_required": 0.1753808430025749
+      }
+    },
+    {
+      "name": "r0004_s000_s011",
+      "site1": "s000",
+      "site2": "s011",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.46583141234722925,
+      "rod_len_right": 0.46583141234722925,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.9613142395005011,
+        "effective_current_length": 0.9316628246944585,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.9316628246944585,
+        "effective_max_length": 1.3602277240539093,
+        "slide_range_each_side_required": 0.21428244967972543
+      }
+    },
+    {
+      "name": "r0005_s001_s002",
+      "site1": "s001",
+      "site2": "s002",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.68718856037103,
+      "rod_len_right": 0.68718856037103,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.4040285355481026,
+        "effective_current_length": 1.37437712074206,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.37437712074206,
+        "effective_max_length": 2.0065905962834076,
+        "slide_range_each_side_required": 0.3161067377706738
+      }
+    },
+    {
+      "name": "r0006_s001_s003",
+      "site1": "s001",
+      "site2": "s003",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.5234422512498881,
+      "rod_len_right": 0.5234422512498881,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.0765359173058187,
+        "effective_current_length": 1.0468845024997762,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.0468845024997762,
+        "effective_max_length": 1.5284513736496732,
+        "slide_range_each_side_required": 0.24078343557494852
+      }
+    },
+    {
+      "name": "r0007_s001_s006",
+      "site1": "s001",
+      "site2": "s006",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.8359078748115344,
+      "rod_len_right": 0.8359078748115344,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.7014671644291113,
+        "effective_current_length": 1.6718157496230688,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.6718157496230688,
+        "effective_max_length": 2.4408509944496806,
+        "slide_range_each_side_required": 0.3845176224133059
+      }
+    },
+    {
+      "name": "r0008_s001_s007",
+      "site1": "s001",
+      "site2": "s007",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.44232308523266095,
+      "rod_len_right": 0.44232308523266095,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.9142975852713645,
+        "effective_current_length": 0.8846461704653219,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.8846461704653219,
+        "effective_max_length": 1.2915834088793698,
+        "slide_range_each_side_required": 0.20346861920702397
+      }
+    },
+    {
+      "name": "r0009_s002_s003",
+      "site1": "s002",
+      "site2": "s003",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.5259461344478643,
+      "rod_len_right": 0.5259461344478643,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.0815436837017711,
+        "effective_current_length": 1.0518922688957286,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.0518922688957286,
+        "effective_max_length": 1.5357627125877638,
+        "slide_range_each_side_required": 0.24193522184601757
+      }
+    },
+    {
+      "name": "r0010_s002_s004",
+      "site1": "s002",
+      "site2": "s004",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.4573951316061044,
+      "rod_len_right": 0.4573951316061044,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.9444416780182514,
+        "effective_current_length": 0.9147902632122088,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.9147902632122088,
+        "effective_max_length": 1.335593784289825,
+        "slide_range_each_side_required": 0.21040176053880805
+      }
+    },
+    {
+      "name": "r0011_s002_s006",
+      "site1": "s002",
+      "site2": "s006",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.4014319043234823,
+      "rod_len_right": 0.4014319043234823,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.8325152234530072,
+        "effective_current_length": 0.8028638086469646,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.8028638086469646,
+        "effective_max_length": 1.1721811606245682,
+        "slide_range_each_side_required": 0.1846586759888018
+      }
+    },
+    {
+      "name": "r0012_s002_s007",
+      "site1": "s002",
+      "site2": "s007",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.2870791909405041,
+      "rod_len_right": 0.2870791909405041,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.6038097966870508,
+        "effective_current_length": 0.5741583818810082,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.5741583818810082,
+        "effective_max_length": 0.838271237546272,
+        "slide_range_each_side_required": 0.13205642783263188
+      }
+    },
+    {
+      "name": "r0013_s002_s009",
+      "site1": "s002",
+      "site2": "s009",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.6487255146896453,
+      "rod_len_right": 0.6487255146896453,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.3271024441853332,
+        "effective_current_length": 1.2974510293792907,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.2974510293792907,
+        "effective_max_length": 1.8942785028937643,
+        "slide_range_each_side_required": 0.2984137367572368
+      }
+    },
+    {
+      "name": "r0014_s002_s011",
+      "site1": "s002",
+      "site2": "s011",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.4037791040234436,
+      "rod_len_right": 0.4037791040234436,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.8372096228529298,
+        "effective_current_length": 0.8075582080468872,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.8075582080468872,
+        "effective_max_length": 1.1790349837484553,
+        "slide_range_each_side_required": 0.18573838785078406
+      }
+    },
+    {
+      "name": "r0015_s003_s004",
+      "site1": "s003",
+      "site2": "s004",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.7736922420754309,
+      "rod_len_right": 0.7736922420754309,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.5770358989569042,
+        "effective_current_length": 1.5473844841508617,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.5473844841508617,
+        "effective_max_length": 2.259181346860258,
+        "slide_range_each_side_required": 0.35589843135469823
+      }
+    },
+    {
+      "name": "r0016_s003_s005",
+      "site1": "s003",
+      "site2": "s005",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.5478245207707765,
+      "rod_len_right": 0.5478245207707765,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.1253004563475955,
+        "effective_current_length": 1.095649041541553,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.095649041541553,
+        "effective_max_length": 1.5996476006506672,
+        "slide_range_each_side_required": 0.25199927955455714
+      }
+    },
+    {
+      "name": "r0017_s003_s006",
+      "site1": "s003",
+      "site2": "s006",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.39383423454869937,
+      "rod_len_right": 0.39383423454869937,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.8173198839034413,
+        "effective_current_length": 0.7876684690973987,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.7876684690973987,
+        "effective_max_length": 1.1499959648822022,
+        "slide_range_each_side_required": 0.18116374789240175
+      }
+    },
+    {
+      "name": "r0018_s003_s007",
+      "site1": "s003",
+      "site2": "s007",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.2804983337096433,
+      "rod_len_right": 0.2804983337096433,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.5906480822253292,
+        "effective_current_length": 0.5609966674192866,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.5609966674192866,
+        "effective_max_length": 0.8190551344321584,
+        "slide_range_each_side_required": 0.12902923350643591
+      }
+    },
+    {
+      "name": "r0019_s003_s009",
+      "site1": "s003",
+      "site2": "s009",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.5927968974839176,
+      "rod_len_right": 0.5927968974839176,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.2152452097738777,
+        "effective_current_length": 1.1855937949678352,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.1855937949678352,
+        "effective_max_length": 1.7309669406530395,
+        "slide_range_each_side_required": 0.2726865728426021
+      }
+    },
+    {
+      "name": "r0020_s004_s007",
+      "site1": "s004",
+      "site2": "s007",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.6809563136650516,
+      "rod_len_right": 0.6809563136650516,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.3915640421361457,
+        "effective_current_length": 1.3619126273301032,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.3619126273301032,
+        "effective_max_length": 1.9883924359019507,
+        "slide_range_each_side_required": 0.31323990428592374
+      }
+    },
+    {
+      "name": "r0021_s005_s006",
+      "site1": "s005",
+      "site2": "s006",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.6537095569412233,
+      "rod_len_right": 0.6537095569412233,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.3370705286884892,
+        "effective_current_length": 1.3074191138824467,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.3074191138824467,
+        "effective_max_length": 1.908831906268372,
+        "slide_range_each_side_required": 0.3007063961929627
+      }
+    },
+    {
+      "name": "r0022_s005_s008",
+      "site1": "s005",
+      "site2": "s008",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.4345236962721392,
+      "rod_len_right": 0.4345236962721392,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.898698807350321,
+        "effective_current_length": 0.8690473925442784,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.8690473925442784,
+        "effective_max_length": 1.2688091931146466,
+        "slide_range_each_side_required": 0.19988090028518407
+      }
+    },
+    {
+      "name": "r0023_s005_s009",
+      "site1": "s005",
+      "site2": "s009",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.943617945983322,
+      "rod_len_right": 0.943617945983322,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.9168873067726866,
+        "effective_current_length": 1.887235891966644,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.887235891966644,
+        "effective_max_length": 2.7553644022713004,
+        "slide_range_each_side_required": 0.43406425515232816
+      }
+    },
+    {
+      "name": "r0024_s006_s008",
+      "site1": "s006",
+      "site2": "s008",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.4146067256558263,
+      "rod_len_right": 0.4146067256558263,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.8588648661176952,
+        "effective_current_length": 0.8292134513116526,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.8292134513116526,
+        "effective_max_length": 1.2106516389150128,
+        "slide_range_each_side_required": 0.19071909380168012
+      }
+    },
+    {
+      "name": "r0025_s006_s009",
+      "site1": "s006",
+      "site2": "s009",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.2903185205438564,
+      "rod_len_right": 0.2903185205438564,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.6102884558937554,
+        "effective_current_length": 0.5806370410877127,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.5806370410877127,
+        "effective_max_length": 0.8477300799880606,
+        "slide_range_each_side_required": 0.13354651945017393
+      }
+    },
+    {
+      "name": "r0026_s007_s010",
+      "site1": "s007",
+      "site2": "s010",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.37155208147639895,
+      "rod_len_right": 0.37155208147639895,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.7727555777588405,
+        "effective_current_length": 0.7431041629527979,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.7431041629527979,
+        "effective_max_length": 1.084932077911085,
+        "slide_range_each_side_required": 0.1709139574791435
+      }
+    },
+    {
+      "name": "r0027_s007_s011",
+      "site1": "s007",
+      "site2": "s011",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.2806776814536814,
+      "rod_len_right": 0.2806776814536814,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.5910067777134054,
+        "effective_current_length": 0.5613553629073628,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.5613553629073628,
+        "effective_max_length": 0.8195788298447496,
+        "slide_range_each_side_required": 0.12911173346869342
+      }
+    },
+    {
+      "name": "r0028_s008_s009",
+      "site1": "s008",
+      "site2": "s009",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.6478959536282143,
+      "rod_len_right": 0.6478959536282143,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 1.325443322062471,
+        "effective_current_length": 1.2957919072564286,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 1.2957919072564286,
+        "effective_max_length": 1.8918561845943858,
+        "slide_range_each_side_required": 0.2980321386689786
+      }
+    },
+    {
+      "name": "r0029_s010_s011",
+      "site1": "s010",
+      "site2": "s011",
+      "actuated": true,
+      "part": "tetra_scaffold",
+      "role": "tetra_edge",
+      "rod_len_left": 0.1321436771639694,
+      "rod_len_right": 0.1321436771639694,
+      "constraint": {
+        "mode": "variable_length_fixed_stretch_ratio",
+        "node_distance": 0.29393876913398137,
+        "effective_current_length": 0.2642873543279388,
+        "stretch_ratio": 1.46,
+        "effective_min_length": 0.2642873543279388,
+        "effective_max_length": 0.3858595373187907,
+        "slide_range_each_side_required": 0.06078609149542594
+      }
+    }
+  ],
+  "metadata": {
+    "description": "Sparse irregular tetrahedral truss generated from an extruded 2D mask.",
+    "rigidity_report_3d": {
+      "n_nodes": 12,
+      "n_edges": 30,
+      "rank": 30,
+      "target_rank": 30,
+      "rank_deficit": 0,
+      "mechanism_dim": 0,
+      "mean_degree": 5.0,
+      "selected_node_min_pairwise_distance": 0.13431745722341892,
+      "close_nonadjacent_rod_pairs": 0,
+      "projection_crossings_xz": 70,
+      "min_nonadjacent_rod_distance": 0.012565527443771214,
+      "clearance_threshold": 0.01,
+      "edge_length_min": 0.29393876913398137,
+      "edge_length_max": 1.9168873067726866,
+      "effective_length_min": 0.2642873543279388,
+      "effective_length_max": 1.887235891966644,
+      "node_length_allowed_min": 0.1482570740302128,
+      "node_length_allowed_max": 2.0385347679154258,
+      "effective_length_allowed_min": 0.11860565922417024,
+      "effective_length_allowed_max": 2.008883353109383,
+      "short_edge_violations": 0,
+      "long_edge_violations": 0,
+      "effective_short_violations": 0,
+      "effective_long_violations": 0,
+      "node_degree_report": {
+        "max_node_degree_limit": 8,
+        "max_degree": 8,
+        "mean_degree": 5.0,
+        "nodes_over_limit": 0,
+        "nodes_at_limit": 2,
+        "high_degree_node_ids": [],
+        "degree_histogram": {
+          "5": 2,
+          "8": 2,
+          "7": 1,
+          "3": 3,
+          "4": 3,
+          "6": 1
+        }
+      },
+      "envelope_radius_m": 0.06671568331359574,
+      "envelope_area_px": 3728,
+      "mask_area_px": 4477,
+      "envelope_iou": 0.7569593147751607,
+      "envelope_recall_mask_covered": 0.7895912441366987,
+      "envelope_precision_inside_mask": 0.9482296137339056,
+      "volume_coverage_recall": 0.7250673854447439,
+      "volume_coverage_radius_m": 0.1297249397764362,
+      "volume_coverage_points": 371,
+      "bbox_crop": [
+        0,
+        81,
+        0,
+        145
+      ],
+      "n_valid_tetra_candidates": 14,
+      "n_selected_tetra_cells": 9,
+      "shell_report": {
+        "seed_tet": [
+          0,
+          2,
+          7,
+          12
+        ],
+        "n_selected_tets": 9,
+        "n_selected_nodes_original": 12,
+        "n_selected_edges_original": 30,
+        "growth_mode": "clearance_aware_face_shelling_0_extension",
+        "rod_clearance": 0.01,
+        "node_clearance": 0.04447712220906384,
+        "node_xz_clearance": 0.0,
+        "avoid_projection_crossing": false,
+        "envelope_radius": 0.06671568331359574,
+        "envelope_weight": 280.0,
+        "volume_coverage_radius": 0.1297249397764362,
+        "volume_coverage_weight": 650.0,
+        "max_node_degree": 8,
+        "degree_rejected_candidates": 152,
+        "node_degree_report_before_compaction": {
+          "max_node_degree_limit": 8,
+          "max_degree": 8,
+          "mean_degree": 5.0,
+          "nodes_over_limit": 0,
+          "nodes_at_limit": 2,
+          "high_degree_node_ids": [],
+          "degree_histogram": {
+            "5": 2,
+            "8": 2,
+            "7": 1,
+            "3": 3,
+            "4": 3,
+            "6": 1
+          }
+        }
+      },
+      "length_mode": "ratio",
+      "lmin_used_node_distance": 0.1482570740302128,
+      "lmax_used_node_distance": 2.0385347679154258,
+      "target_height": 1.2,
+      "thickness_min": 0.1297249397764362,
+      "thickness_max": 0.6671568331359575,
+      "stretch_ratio": 1.46,
+      "port_offset_used": 0.01482570740302128,
+      "envelope_radius": 0.06671568331359574,
+      "volume_coverage_radius": 0.1297249397764362,
+      "volume_coverage_weight": 650.0,
+      "volume_coverage_max_points": 500,
+      "rod_clearance_used": 0.01,
+      "volume_source": "mesh",
+      "mesh_path": "/Users/ke/Library/Mobile Documents/com~apple~CloudDocs/Code/拟态论文研究/Work/动物视频 → 关键点运动轨迹/data/processed/小猫_assimp.glb",
+      "mesh_info": {
+        "mesh_path": "/Users/ke/Library/Mobile Documents/com~apple~CloudDocs/Code/拟态论文研究/Work/动物视频 → 关键点运动轨迹/data/processed/小猫_assimp.glb",
+        "mesh_geometries": 1,
+        "mesh_vertices": 2154,
+        "mesh_faces": 4304,
+        "mesh_is_watertight": true,
+        "axis_order_used": "auto",
+        "target_axes_from_source": [
+          0,
+          2,
+          1
+        ],
+        "target_axis_signs": [
+          1,
+          1,
+          1
+        ],
+        "bounds": [
+          [
+            -1.2802241287852127,
+            -0.2306409655268676,
+            0.12
+          ],
+          [
+            1.2802241287852127,
+            0.2306409655268676,
+            1.3199999999999998
+          ]
+        ],
+        "extents": [
+          2.5604482575704255,
+          0.4612819310537352,
+          1.1999999999999997
+        ],
+        "target_height": 1.2,
+        "voxel_pitch": 0.12,
+        "voxel_shape": [
+          23,
+          5,
+          11
+        ],
+        "voxel_filled_count": 371,
+        "projection_resolution": 80,
+        "projection_mask_shape": [
+          81,
+          145
+        ],
+        "projection_xz_bounds": [
+          -1.6199999999999999,
+          1.6199999999999999,
+          -0.18,
+          1.6199999999999999
+        ]
+      },
+      "sample_spacing_report": {
+        "before": 15,
+        "after": 13,
+        "removed": 2,
+        "min_dist_requested": 0.02223856110453192,
+        "min_xz_dist_requested": 0.06671568331359574,
+        "min_pairwise_dist_after": 0.12131225310939839
+      },
+      "sample_min_dist_frac": 0.006,
+      "sample_min_xz_dist_frac": 0.018,
+      "node_clearance_frac": 0.012,
+      "node_xz_clearance_frac": 0.0,
+      "max_node_degree": 8,
+      "rod_min_frac": 0.04,
+      "rod_max_frac": 0.55
+    },
+    "selected_tets": [
+      [
+        0,
+        2,
+        7,
+        11
+      ],
+      [
+        0,
+        2,
+        3,
+        7
+      ],
+      [
+        2,
+        3,
+        4,
+        7
+      ],
+      [
+        1,
+        2,
+        3,
+        7
+      ],
+      [
+        1,
+        2,
+        3,
+        6
+      ],
+      [
+        2,
+        3,
+        6,
+        9
+      ],
+      [
+        3,
+        5,
+        6,
+        9
+      ],
+      [
+        5,
+        6,
+        8,
+        9
+      ],
+      [
+        0,
+        7,
+        10,
+        11
+      ]
+    ],
+    "note": "All rod_groups are actuated in static-design mode to emulate fixed-length bars in MuJoCo."
+  }
+}
