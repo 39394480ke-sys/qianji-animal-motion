@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -44,6 +45,7 @@ def test_2d_experiment_failure_does_not_publish_partial_case(
         "ANIMAL_DATA_ROOT": str(animal_root),
         "QIANJI_ROOT": str(qianji_root),
         "OUTPUT_ROOT": str(output_root),
+        "PYTHON_BIN": sys.executable,
         "PATH": f"{executable_root}{os.pathsep}{os.environ['PATH']}",
     }
     result = subprocess.run(

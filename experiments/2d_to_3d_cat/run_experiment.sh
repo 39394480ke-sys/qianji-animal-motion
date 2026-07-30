@@ -8,7 +8,7 @@ FINAL_OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/outputs/experiments/2d_to_3d_cat}
 
 MESH="${ANIMAL_DATA_ROOT}/data/processed/小猫_assimp.glb"
 TRAJECTORY="${ANIMAL_DATA_ROOT}/outputs/manual_correction/cat_walk/review_v2_migrated/keypoint_trajectory_2d_corrected.json"
-PYTHON="${REPO_ROOT}/.venv/bin/python"
+PYTHON="${PYTHON_BIN:-${REPO_ROOT}/.venv/bin/python}"
 
 for command in git mamba ffmpeg ffprobe; do
   if ! command -v "$command" >/dev/null 2>&1; then
