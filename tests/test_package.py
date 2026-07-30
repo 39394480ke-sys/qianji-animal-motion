@@ -25,4 +25,7 @@ def test_all_pipeline_commands_are_packaged() -> None:
             "qianji_animal_motion.keypoints_39_cli:main"
         ),
         "qianji-lift-39-keypoints": "qianji_animal_motion.lift_39_cli:main",
+        "qianji-prepare-vgt-control": (
+            "qianji_animal_motion.vgt_control_cli:main"
+        ),
     }
