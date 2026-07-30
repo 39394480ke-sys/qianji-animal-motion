@@ -88,6 +88,8 @@ def test_2d_experiment_failure_does_not_publish_partial_case(
     assert result.returncode == 23
     assert not output_root.exists()
     assert not list(tmp_path.glob(".published-case.case-staging.*"))
+
+
 def test_39point_experiment_failure_does_not_publish_partial_case(
     tmp_path: Path,
 ) -> None:
@@ -138,6 +140,7 @@ def test_39point_experiment_failure_does_not_publish_partial_case(
             "ANIMAL_DATA_ROOT": str(animal_root),
             "QIANJI_ROOT": str(qianji_root),
             "OUTPUT_ROOT": str(output_root),
+            "PYTHON_BIN": sys.executable,
         },
         capture_output=True,
         text=True,

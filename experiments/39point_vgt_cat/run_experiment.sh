@@ -13,7 +13,7 @@ PREDICTIONS="${ANIMAL_DATA_ROOT}/outputs/zero_shot/cat_walk/cat_walk_30fps_720p_
 MESH="${ANIMAL_DATA_ROOT}/data/processed/小猫_assimp.glb"
 CORRECTED="${ANIMAL_DATA_ROOT}/outputs/manual_correction/cat_walk/review_v2_migrated/keypoint_trajectory_2d_corrected.json"
 
-PYTHON="${REPO_ROOT}/.venv/bin/python"
+PYTHON="${PYTHON_BIN:-${REPO_ROOT}/.venv/bin/python}"
 GENERATOR="${QIANJI_ROOT}/morph_generator/generate.py"
 REACHABILITY="${QIANJI_ROOT}/controller/check_keypoint_reachability.py"
 MORPHOLOGY="${QIANJI_ROOT}/controller/optimize_morphology_for_motion.py"
