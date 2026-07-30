@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+from pathlib import Path
 
+import cv2
 import numpy as np
 import pandas as pd
 import pytest
@@ -10,6 +14,7 @@ from qianji_animal_motion.keypoints_39 import (
     SUPERANIMAL_QUADRUPED_39,
     build_39point_observation,
 )
+from qianji_animal_motion.keypoints_39_cli import run_observation_export
 from qianji_animal_motion.semantic_mapping import VideoInfo
 
 
@@ -186,4 +191,86 @@ def test_rejects_role_loss_and_malformed_metadata() -> None:
             _dataframe(values),
             _video(3),
             anchor_frame=0,
+        )
+
+
+def _write_video(path: Path, frame_count: int = 2) -> None:
+    writer = cv2.VideoWriter(
+        str(path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        30.0,
+        (100, 80),
+    )
+    assert writer.isOpened()
+    for frame_idx in range(frame_count):
+        frame = np.full((80, 100, 3), 20 + 10 * frame_idx, dtype=np.uint8)
+        writer.write(frame)
+    writer.release()
+
+
+def test_observation_export_publishes_hashed_manifest_and_preview(
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "cat.mp4"
+    predictions = tmp_path / "predictions.h5"
+    mesh = tmp_path / "cat.glb"
+    corrected_spine = tmp_path / "corrected.json"
+    _write_video(video)
+    _dataframe(_values(2)).to_hdf(predictions, key="df")
+    mesh.write_bytes(b"mesh")
+    corrected_spine.write_text(
+        json.dumps({"identity_anchor": {"frame_idx": 1}}),
+        encoding="utf-8",
+    )
+
+    outputs = run_observation_export(
+        video_path=video,
+        predictions_path=predictions,
+        mesh_path=mesh,
+        corrected_spine_path=corrected_spine,
+        output_dir=tmp_path / "case",
+        reference_frame=1,
+        mesh_generation_method="hunyuan3d_from_video_frame",
+    )
+
+    assert all(path.is_file() and path.stat().st_size > 0 for path in outputs)
+    manifest = json.loads(outputs.manifest.read_text(encoding="utf-8"))
+    assert manifest["reference_frame"] == 1
+    assert manifest["mesh_provenance"]["generation_method"] == (
+        "hunyuan3d_from_video_frame"
+    )
+    for label, path in {
+        "video": video,
+        "predictions": predictions,
+        "mesh": mesh,
+        "corrected_spine": corrected_spine,
+    }.items():
+        assert manifest["sources"][label] == {
+            "path": str(path.resolve()),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+    capture = cv2.VideoCapture(str(outputs.preview))
+    assert capture.isOpened()
+    assert capture.get(cv2.CAP_PROP_FRAME_WIDTH) == 100
+    assert capture.get(cv2.CAP_PROP_FRAME_HEIGHT) == 80
+    assert capture.get(cv2.CAP_PROP_FPS) == pytest.approx(30.0)
+    decoded = []
+    while True:
+        ok, frame = capture.read()
+        if not ok:
+            break
+        decoded.append(frame)
+    capture.release()
+    assert len(decoded) == 2
+    assert int(decoded[0].max()) > 100
+
+    with pytest.raises(FileExistsError, match="output already exists"):
+        run_observation_export(
+            video_path=video,
+            predictions_path=predictions,
+            mesh_path=mesh,
+            corrected_spine_path=corrected_spine,
+            output_dir=tmp_path / "case",
+            reference_frame=1,
+            mesh_generation_method="hunyuan3d_from_video_frame",
         )

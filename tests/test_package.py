@@ -21,4 +21,7 @@ def test_all_pipeline_commands_are_packaged() -> None:
         "qianji-export-cvat": "qianji_animal_motion.cvat_correction:export_main",
         "qianji-import-cvat": "qianji_animal_motion.cvat_correction:import_main",
         "qianji-lift-keypoints": "qianji_animal_motion.lift_cli:main",
+        "qianji-export-39-keypoints": (
+            "qianji_animal_motion.keypoints_39_cli:main"
+        ),
     }
