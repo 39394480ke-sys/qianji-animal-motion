@@ -186,9 +186,11 @@ def verify_case(case_root: Path) -> dict:
             )
         ):
             raise ValueError("input video must declare 272 frames at 30 FPS")
-        if manifest.get("mesh_generation_method") != (
-            "hunyuan3d_from_video_frame"
-        ):
+        mesh_provenance = manifest.get("mesh_provenance")
+        generation_method = manifest.get("mesh_generation_method")
+        if isinstance(mesh_provenance, dict):
+            generation_method = mesh_provenance.get("generation_method")
+        if generation_method != "hunyuan3d_from_video_frame":
             raise ValueError("Hunyuan3D mesh provenance is missing")
         return {"verified_source_hashes": verified}
 
@@ -400,12 +402,7 @@ def verify_case(case_root: Path) -> dict:
         motion_limits = payload(
             "motion/vgt_motion_manifest.json"
         ).get("scientific_limits")
-        required_input = (
-            "mesh_reconstructed_in_pipeline",
-            "metric_depth_observed",
-            "dynamics_simulated",
-            "mesh_vertices_deformed",
-        )
+        required_input = ("metric_depth_observed",)
         required_motion = (
             "metric_depth_observed",
             "camera_calibrated",
@@ -417,6 +414,16 @@ def verify_case(case_root: Path) -> dict:
             input_limits.get(name) is not False for name in required_input
         ):
             raise ValueError("input scientific limitations are incomplete")
+        mesh_deformed = input_limits.get(
+            "mesh_vertices_deformed",
+            input_limits.get("triangle_mesh_deformed"),
+        )
+        if mesh_deformed is not False:
+            raise ValueError("input mesh-deformation limitation is missing")
+        if input_limits.get("mesh_reconstructed_in_pipeline", False) is not False:
+            raise ValueError("input mesh reconstruction limitation is invalid")
+        if input_limits.get("dynamics_simulated", False) is not False:
+            raise ValueError("input dynamics limitation is invalid")
         if not isinstance(motion_limits, dict) or any(
             motion_limits.get(name) is not False for name in required_motion
         ):

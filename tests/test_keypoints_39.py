@@ -239,6 +239,12 @@ def test_observation_export_publishes_hashed_manifest_and_preview(
     assert manifest["mesh_provenance"]["generation_method"] == (
         "hunyuan3d_from_video_frame"
     )
+    assert manifest["scientific_limits"]["mesh_vertices_deformed"] is False
+    assert (
+        manifest["scientific_limits"]["mesh_reconstructed_in_pipeline"]
+        is False
+    )
+    assert manifest["scientific_limits"]["dynamics_simulated"] is False
     for label, path in {
         "video": video,
         "predictions": predictions,

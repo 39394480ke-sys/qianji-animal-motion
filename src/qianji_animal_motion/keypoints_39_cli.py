@@ -239,6 +239,9 @@ def run_observation_export(
             "camera_calibrated": False,
             "global_translation_preserved": False,
             "triangle_mesh_deformed": False,
+            "mesh_vertices_deformed": False,
+            "mesh_reconstructed_in_pipeline": False,
+            "dynamics_simulated": False,
         },
     }
 
