@@ -129,7 +129,7 @@ QianJi 的 `feasible_site_targets.npz` 被严格校验并重新打包为
 严格自动验收案例位于：
 
 ```text
-outputs/experiments/39point_vgt_cat_v4
+outputs/experiments/39point_vgt_cat_v5
 ```
 
 最终选择 `scale_010_motion_informed_base_c010`：
@@ -143,7 +143,7 @@ outputs/experiments/39point_vgt_cat_v4
 | marginal | 6 / 272 |
 | unreachable | 0 / 272 |
 | 最大控制点误差 | 0.01609 m |
-| 最大杆长违反（报告和独立重算） | 0.00028249 m |
+| 最大杆长违反（报告和独立重算） | 0.000282492 m |
 | 单帧最大违反杆比例 | 1 / 30 = 0.03333 |
 | VGT positions | `(272, 12, 3)` |
 | 动画 | 1246x720、30 FPS、272 帧 |
@@ -156,11 +156,12 @@ marginal、12 unreachable，最大误差 0.05277 m。motion-informed + 10% 收�
 
 Desired 控制目标与 QianJi projected 控制目标是不同文件和不同哈希。最终
 `vgt_motion.npz` SHA-256 为
-`f63e2df09eb1baa61b851618fbf678d5e774e4f21674a9d99017ee328aa11160`。
+`44d54913c289260f1690adebf5936ee8255b66985497a17474521179db03dc6f`。
 
 `final_acceptance_report.json` 的全部自动检查为 `passed: true`。抽取帧检查
 确认二维覆盖图和四视图结构图非空；完整运动的人工视觉验收仍应在合并前
-完成，因此 PR 保持 Draft。
+完成，因此 PR 保持 Draft。`v4` 保留为前一份通过记录；`v5` 进一步把所有
+候选元数据改为可移动的相对路径，并已在发布后的最终目录重新运行候选比较。
 
 ## 一键运行
 
@@ -169,7 +170,7 @@ uv pip install --python .venv/bin/python -e .
 
 ANIMAL_DATA_ROOT="/absolute/qianji-animal-motion" \
 QIANJI_ROOT="/absolute/QianJi" \
-OUTPUT_ROOT="$PWD/outputs/experiments/39point_vgt_cat_v4" \
+OUTPUT_ROOT="$PWD/outputs/experiments/39point_vgt_cat_v6" \
 bash experiments/39point_vgt_cat/run_experiment.sh
 ```
 
