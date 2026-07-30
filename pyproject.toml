@@ -42,6 +42,7 @@ qianji-export-cvat = "qianji_animal_motion.cvat_correction:export_main"
 qianji-import-cvat = "qianji_animal_motion.cvat_correction:import_main"
 qianji-lift-keypoints = "qianji_animal_motion.lift_cli:main"
 qianji-export-39-keypoints = "qianji_animal_motion.keypoints_39_cli:main"
+qianji-lift-39-keypoints = "qianji_animal_motion.lift_39_cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

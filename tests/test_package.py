@@ -24,4 +24,5 @@ def test_all_pipeline_commands_are_packaged() -> None:
         "qianji-export-39-keypoints": (
             "qianji_animal_motion.keypoints_39_cli:main"
         ),
+        "qianji-lift-39-keypoints": "qianji_animal_motion.lift_39_cli:main",
     }
