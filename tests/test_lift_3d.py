@@ -224,6 +224,83 @@ def test_reference_selection_prefers_anchor_then_median_torso() -> None:
     assert select_reference_frame(_trajectory(frames, identity_anchor=None)) == 2
 
 
+@pytest.mark.parametrize(
+    ("coordinate_system", "message"),
+    [
+        (None, "coordinate_system"),
+        ("image_pixels_bottom_left_origin_x_right_y_up", "coordinate_system"),
+    ],
+)
+def test_trajectory_rejects_unsupported_coordinate_system(
+    coordinate_system: str | None,
+    message: str,
+) -> None:
+    robot, rig = _robot_and_rig()
+    trajectory = _trajectory()
+    if coordinate_system is None:
+        del trajectory["coordinate_system"]
+    else:
+        trajectory["coordinate_system"] = coordinate_system
+
+    with pytest.raises(ValueError, match=message):
+        lift_trajectory(trajectory, robot, rig)
+
+
+@pytest.mark.parametrize("schema_version", [None, "1.1.0", "2.0.0"])
+def test_trajectory_rejects_unsupported_schema_version(
+    schema_version: str | None,
+) -> None:
+    robot, rig = _robot_and_rig()
+    trajectory = _trajectory()
+    if schema_version is None:
+        del trajectory["schema_version"]
+    else:
+        trajectory["schema_version"] = schema_version
+
+    with pytest.raises(ValueError, match="schema_version"):
+        lift_trajectory(trajectory, robot, rig)
+
+
+@pytest.mark.parametrize(
+    ("timestamps", "message"),
+    [
+        ([0.0, float("nan")], "finite"),
+        ([0.0, 0.0], "strictly increasing"),
+        ([0.1, 0.0], "strictly increasing"),
+        ([0.0, 0.2], "frame_idx/fps"),
+    ],
+)
+def test_trajectory_rejects_invalid_timestamps(
+    timestamps: list[float],
+    message: str,
+) -> None:
+    robot, rig = _robot_and_rig()
+    frames = [_frame(0, REFERENCE_2D), _frame(1, REFERENCE_2D)]
+    for frame, timestamp in zip(frames, timestamps, strict=True):
+        frame["timestamp_s"] = timestamp
+
+    with pytest.raises(ValueError, match=message):
+        lift_trajectory(_trajectory(frames), robot, rig)
+
+
+def test_corrected_trajectory_contract_is_supported() -> None:
+    robot, rig = _robot_and_rig()
+    trajectory = _trajectory()
+    trajectory["schema_version"] = "1.3.0"
+
+    result = lift_trajectory(trajectory, robot, rig)
+
+    assert result.motion["frames"][0]["time"] == 0.0
+    assert result.report["input_contract"] == {
+        "schema": "qianji.keypoint_trajectory_2d",
+        "schema_version": "1.3.0",
+        "coordinate_system": (
+            "image_pixels_top_left_origin_x_right_y_down"
+        ),
+        "timestamp_basis": "frame_idx/fps",
+    }
+
+
 def test_rig_validation_rejects_missing_and_duplicate_sites() -> None:
     robot, rig = _robot_and_rig()
     missing = copy.deepcopy(rig)
