@@ -14,8 +14,14 @@
 ```
 
 初始 GLB 来自视频截帧后使用 Hunyuan3D 生成的闭合模型，再经 Assimp 转为
-GLB。流水线不在运行时重新生成三角 Mesh。QianJi 只把该 Mesh 转换为抽象
-12-site/30-rod VGT，原始 2,154 个顶点不参与运动传播。
+GLB。流水线不在运行时重新生成三角 Mesh，原始 2,154 个顶点也不参与运动
+传播。
+
+QianJi 的 Mesh 转 VGT 预处理曾产生一个 12-site/30-rod 模型。该模型现在以
+冻结模板保存，并绑定源 Mesh SHA-256、QianJi commit、生成参数和模板哈希。
+一键运动实验会验证这些记录，而不重新运行会改变节点数和节点身份的四面体
+采样。冻结的是“初始 VGT 模型”，不是运动结果；每次运行仍会重新计算 39 点、
+2.5D、控制、可达性、候选选择和 272 帧 VGT 序列。
 
 ## 为什么 2.5D 不是完整 3D
 
@@ -37,14 +43,22 @@ SuperAnimal H5 的 39 个 bodypart 原名和顺序逐帧保留。置信度低于
 越界或相对躯干尺度异常跳变的点变为显式无效，不被插值。前后腿各自按
 thigh/knee/paw 整条链纠正身份，避免只交换足端。
 
-真实案例是 272 帧、30 FPS、1246x720。参考帧是 152。后腿身份在第 116 帧
-发生一次链级交换，模糊帧为 74、112、193、229；这些证据都在质量报告中。
+H5 必须使用严格的 `RangeIndex(0, 272)`，视频、H5 和人工校正轨迹必须具有
+相同帧数、时间基和来源哈希。人工校正文件中的前后腿 `keep/swap` 锚点会
+显式传入身份解析器。身份模糊时，同侧区域的左右两条完整
+thigh/knee/paw 链都设为无效，同时保留 raw 坐标供审计，不能直接驱动 VGT。
+
+真实案例是 272 帧、30 FPS、1246x720，参考帧为 152，人工锚点为前腿
+`keep`、后腿 `keep`。后腿身份在第 116 帧发生一次链级交换，模糊帧为
+74、112、193、229。
 
 ### 2. 中性 39 地标
 
-参考帧的二维点先投影到校正躯干的局部纵向/竖直坐标。QianJi rig 的两个
-spine site 定义三维 forward，中性结构的全局 Z 正交分量定义 up，两者叉积
-定义 lateral。左右角色获得相反的固定 lateral 偏移，中心角色为零。
+每个角色使用参考帧附近 `+/-15` 帧内最近的有效观测建立中性参考；该窗口内
+仍不可用的角色采用显式中性替代，不能用无效坐标定义整段运动零点。二维点
+随后投影到校正躯干的局部纵向/竖直坐标。QianJi rig 的两个 spine site 定义
+三维 forward，中性结构的全局 Z 正交分量定义 up，两者叉积定义 lateral。
+左右角色获得相反的固定 lateral 偏移，中心角色为零。
 
 四个 antler 角色因为猫不适用而保留为命名占位，置信度为零。这样既不伪造
 解剖结构，也不破坏固定 39 角色契约。
@@ -52,9 +66,9 @@ spine site 定义三维 forward，中性结构的全局 Z 正交分量定义 up�
 ### 3. 逐帧 2.5D 重定向
 
 对每个有效角色，计算它在逐帧躯干坐标系中的归一化位置与参考位置之差，只
-把 longitudinal/vertical 两个分量传给三维中性地标。无效角色回到中性位置。
-真实选择结果使用 `motion_scale=0.10`，最大 lateral 数值误差约
-`1.89e-18 m`，即没有人为制造侧向运动。
+把 longitudinal/vertical 两个分量传给三维中性地标。无效角色使用记录了
+原因和来源帧的中性替代，不做跨帧插值或平滑。真实选择结果使用
+`motion_scale=0.10`，不从单目视频伪造 lateral 深度运动。
 
 ### 4. 六个结构控制
 
@@ -77,13 +91,26 @@ effective_min_length = 0.90 * effective_current_length
 ```
 
 `effective_current_length` 和 `effective_max_length` 不变。这不是把动作缩小到
-10%，而是允许每根伸缩杆在当前长度基础上最多收短 10%。原先 min 等于
-current 时只能伸长，很多视频动作需要局部收缩，因此会大量落入 marginal
-甚至 unreachable。
+10%，而是允许整根有效杆长最多收短 10%。双侧滑杆控制范围写成：
 
-实验比较 0.05/0.10/0.15 三种运动尺度、0/10% 收缩、bbox/motion-informed
-rig，以及固定拓扑 morphology 优化。合格条件是 272 帧、unreachable 为零、
-最大六控制点投影误差不超过 0.05 m、VGT 数组有限且拓扑为 12/30。
+```text
+slide_min_each_side = -0.5 * 0.10 * effective_current_length
+slide_max_each_side =  0.5 * (effective_max_length - effective_current_length)
+```
+
+因此两侧合计才是 10%，不会在 QianJi 控制、JSON 和 MuJoCo XML 中重复计算。
+最终 XML 由支持负滑杆下限的 QianJi converter 从被选中的 canonical robot
+重新生成，并逐杆核对 joint range 和 actuator ctrlrange。
+
+实验包含 7 个候选，比较 0.05/0.10/0.15 三种运动尺度、0/10% 收缩、
+bbox/motion-informed rig，以及不带收缩的固定拓扑 morphology 优化。候选
+只有同时满足以下条件才可被选择：
+
+- 272 帧、12 site、30 rod，所有数组有限且时间严格对应 30 FPS；
+- unreachable 为 0，最大六控制点投影误差不超过 0.05 m；
+- QianJi 报告及从 NPZ 独立重算的最大杆长违反都不超过 0.0005 m；
+- 最大估计 clipping 比例和独立重算的违反杆比例都不超过 0.05；
+- robot 的实际收缩范围、候选声明和 `extension_only` 完全一致。
 
 ### 6. VGT 序列和动画
 
@@ -99,10 +126,10 @@ QianJi 的 `feasible_site_targets.npz` 被严格校验并重新打包为
 
 ## 真实结果
 
-验收案例位于：
+严格自动验收案例位于：
 
 ```text
-outputs/experiments/39point_vgt_cat_v3
+outputs/experiments/39point_vgt_cat_v4
 ```
 
 最终选择 `scale_010_motion_informed_base_c010`：
@@ -116,18 +143,24 @@ outputs/experiments/39point_vgt_cat_v3
 | marginal | 6 / 272 |
 | unreachable | 0 / 272 |
 | 最大控制点误差 | 0.01609 m |
-| 最大杆长违反 | 0.0002825 m |
+| 最大杆长违反（报告和独立重算） | 0.00028249 m |
+| 单帧最大违反杆比例 | 1 / 30 = 0.03333 |
 | VGT positions | `(272, 12, 3)` |
 | 动画 | 1246x720、30 FPS、272 帧 |
 
-这比 bbox、无收缩的 `scale=0.10` 明显改善：后者为 2 feasible、259
-marginal、11 unreachable，最大误差 0.05271 m。motion-informed + 10% 收缩
+这比 bbox、无收缩的 `scale=0.10` 明显改善：后者为 1 feasible、259
+marginal、12 unreachable，最大误差 0.05277 m。motion-informed + 10% 收缩
 把不可达帧降到零，并让 266 帧进入严格 feasible；还剩 6 帧 marginal，说明
-几何可达性已满足本项目门槛，但并不等于动力学步态有效。
+它通过本项目外层几何门禁，但并非每帧都达到 QianJi 更严的 `feasible`
+分类，更不等于动力学步态有效。
 
 Desired 控制目标与 QianJi projected 控制目标是不同文件和不同哈希。最终
 `vgt_motion.npz` SHA-256 为
-`22313aabfaa343980e3a71350219bbee1c00578d3d78848ad6ef7a0d492a5177`。
+`f63e2df09eb1baa61b851618fbf678d5e774e4f21674a9d99017ee328aa11160`。
+
+`final_acceptance_report.json` 的全部自动检查为 `passed: true`。抽取帧检查
+确认二维覆盖图和四视图结构图非空；完整运动的人工视觉验收仍应在合并前
+完成，因此 PR 保持 Draft。
 
 ## 一键运行
 
@@ -140,9 +173,10 @@ OUTPUT_ROOT="$PWD/outputs/experiments/39point_vgt_cat_v4" \
 bash experiments/39point_vgt_cat/run_experiment.sh
 ```
 
-输出目录必须不存在。脚本对 QianJi 只读，所有收缩 robot 和 morphology
-robot 都写入实验目录。最后运行 `verify_case.py`，任何验收项失败都会以非零
-状态退出。
+输出目录必须不存在。脚本先在同级隐藏 staging 目录中构建整个案例，失败时
+清理，全部通过后才原子发布到 `OUTPUT_ROOT`。脚本对 QianJi 只读，所有收缩
+robot 和 morphology robot 都写入实验目录。最终记录两个仓库 commit、dirty
+状态、脚本哈希、Python 包版本和真实调用参数，并运行 `verify_case.py`。
 
 ## 完成标准
 
@@ -150,8 +184,8 @@ robot 都写入实验目录。最后运行 `verify_case.py`，任何验收项失
 - 角色无缺失，所有 JSON/NPZ 有限，不跨帧插值或平滑；
 - robot 为 12 site、30 rod，端点引用有效；
 - VGT NPZ 为 `(272,12,3)`，时间严格递增且对应 30 FPS；
-- desired/projected 路径与哈希不同；
-- unreachable 为零，最大控制点误差不超过 5 cm；
+- desired/projected 分别与六控制语义、所选 rig 和 NPZ site 位置一致；
+- unreachable 为零，控制误差、杆长误差和 clipping 比例均通过门禁；
 - 2D/VGT 视频均为 30 FPS、272 帧且非空；
-- 输入、输出、robot、rig 和控制轨迹有 SHA-256；
+- 输入、冻结初始 VGT、selected robot/XML、rig、控制轨迹和输出均可溯源；
 - 明确不主张度量深度、相机标定、全局位移、动力学或 Mesh 顶点形变。

@@ -184,15 +184,15 @@ run_reachability_candidate() {
     --argjson motion_scale "$motion_scale" \
     --argjson contraction_fraction "$contraction" \
     --arg rig_variant "$rig_variant" \
-    --arg landmark_dir "$scale_root/landmarks" \
-    --arg control_map "$scale_root/control/control_map_${rig_variant}.json" \
-    --arg run_summary "$candidate_root/reachability/run_summary.json" \
-    --arg reachability_report "$candidate_root/reachability/reachability_report.json" \
-    --arg robot "$robot_path" \
-    --arg rig "$rig_path" \
-    --arg desired_motion "$target_path" \
-    --arg projected_motion "$candidate_root/reachability/projected_keypoint_motion.json" \
-    --arg site_npz "$candidate_root/reachability/feasible_site_targets.npz" \
+    --arg landmark_dir "../../scales/scale_${scale_code}/landmarks" \
+    --arg control_map "../../scales/scale_${scale_code}/control/control_map_${rig_variant}.json" \
+    --arg run_summary "reachability/run_summary.json" \
+    --arg reachability_report "reachability/reachability_report.json" \
+    --arg robot "../../scales/scale_${scale_code}/control/robot_contraction_${robot_suffix}.json" \
+    --arg rig "../../scales/scale_${scale_code}/control/$(basename "$rig_path")" \
+    --arg desired_motion "../../scales/scale_${scale_code}/control/$(basename "$target_path")" \
+    --arg projected_motion "reachability/projected_keypoint_motion.json" \
+    --arg site_npz "reachability/feasible_site_targets.npz" \
     '{
       candidate_id: $candidate_id,
       expected_frames: 272,
@@ -247,16 +247,16 @@ jq '{summary: .summary}' \
   > "$morph_root/run_summary.json"
 jq -n \
   --arg candidate_id "$morph_candidate" \
-  --arg landmark_dir "$scale_root/landmarks" \
-  --arg control_map "$scale_root/control/control_map_motion_informed.json" \
-  --arg run_summary "$morph_root/run_summary.json" \
-  --arg reachability_report "$morph_root/morphology/reachability_after/reachability_report.json" \
-  --arg robot "$morph_root/morphology/robot_optimized.json" \
-  --arg rig "$morph_rig" \
-  --arg desired_motion "$morph_target" \
-  --arg projected_motion "$morph_root/morphology/reachability_after/projected_keypoint_motion.json" \
-  --arg site_npz "$morph_root/morphology/reachability_after/feasible_site_targets.npz" \
-  --arg morphology_report "$morph_root/morphology/morph_optimization_report.json" \
+  --arg landmark_dir "../../scales/scale_010/landmarks" \
+  --arg control_map "../../scales/scale_010/control/control_map_motion_informed.json" \
+  --arg run_summary "run_summary.json" \
+  --arg reachability_report "morphology/reachability_after/reachability_report.json" \
+  --arg robot "morphology/robot_optimized.json" \
+  --arg rig "../../scales/scale_010/control/rig_motion_informed.json" \
+  --arg desired_motion "../../scales/scale_010/control/target_control_motion_motion_informed.json" \
+  --arg projected_motion "morphology/reachability_after/projected_keypoint_motion.json" \
+  --arg site_npz "morphology/reachability_after/feasible_site_targets.npz" \
+  --arg morphology_report "morphology/morph_optimization_report.json" \
   '{
     candidate_id: $candidate_id,
     expected_frames: 272,
@@ -291,13 +291,13 @@ jq '.selected_candidate' "$OUTPUT_ROOT/reports/reachability_report.json" \
 selected_root="$(jq -r '.selected_candidate.candidate_root' "$OUTPUT_ROOT/reports/reachability_report.json")"
 selected_root="$OUTPUT_ROOT/$selected_root"
 selected_meta="$selected_root/candidate.json"
-landmark_dir="$(jq -r '.publication.landmark_dir' "$selected_meta")"
-control_map="$(jq -r '.publication.control_map' "$selected_meta")"
-selected_robot="$(jq -r '.artifacts.robot' "$selected_meta")"
-selected_rig="$(jq -r '.artifacts.rig' "$selected_meta")"
-selected_desired="$(jq -r '.artifacts.desired_motion' "$selected_meta")"
-selected_projected="$(jq -r '.artifacts.projected_motion' "$selected_meta")"
-selected_npz="$(jq -r '.artifacts.site_npz' "$selected_meta")"
+landmark_dir="$selected_root/$(jq -r '.publication.landmark_dir' "$selected_meta")"
+control_map="$selected_root/$(jq -r '.publication.control_map' "$selected_meta")"
+selected_robot="$selected_root/$(jq -r '.artifacts.robot' "$selected_meta")"
+selected_rig="$selected_root/$(jq -r '.artifacts.rig' "$selected_meta")"
+selected_desired="$selected_root/$(jq -r '.artifacts.desired_motion' "$selected_meta")"
+selected_projected="$selected_root/$(jq -r '.artifacts.projected_motion' "$selected_meta")"
+selected_npz="$selected_root/$(jq -r '.artifacts.site_npz' "$selected_meta")"
 
 cp "$landmark_dir/neutral_landmarks_39.json" "$OUTPUT_ROOT/landmarks/"
 cp "$landmark_dir/keypoint_motion_3d_39.json" "$OUTPUT_ROOT/landmarks/"

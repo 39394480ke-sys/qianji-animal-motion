@@ -32,10 +32,15 @@ bash experiments/39point_vgt_cat/run_experiment.sh
 ```
 
 The script rejects an existing `OUTPUT_ROOT`, treats QianJi as read-only,
-hashes the real inputs, runs the bounded six-candidate reachability study,
-selects only a zero-unreachable result below 5 cm maximum control error, and
-exits nonzero unless `reports/final_acceptance_report.json` passes.
+verifies the source Mesh against a frozen QianJi-generated 12-site/30-rod
+template, and builds the whole case in a hidden staging directory. It runs a
+seven-candidate reachability study and only publishes a candidate with zero
+unreachable frames, at most 5 cm control error, at most 0.5 mm rod violation,
+and at most 5% clipped or independently violated rods.
 
 The selected result is copied into the stable `landmarks/`, `control/`,
 `motion/`, and `previews/` paths. Raw candidate evidence remains under
-`candidates/`.
+`candidates/`. The final verifier independently checks source lineage, 39-point
+semantics, desired/projected controls, NPZ positions, rod limits, selected
+robot/XML identity, previews, and experiment provenance. Automated acceptance
+does not replace the pending human visual review.

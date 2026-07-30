@@ -18,6 +18,17 @@ def test_39point_experiment_uses_the_verified_frozen_12x30_robot() -> None:
     assert '"$GENERATOR" 3d-mesh' not in script
 
 
+def test_39point_candidate_metadata_remains_valid_after_case_publish() -> None:
+    script = (
+        REPOSITORY_ROOT / "experiments/39point_vgt_cat/run_experiment.sh"
+    ).read_text(encoding="utf-8")
+
+    assert '--arg landmark_dir "../../scales/scale_${scale_code}/landmarks"' in script
+    assert '--arg run_summary "reachability/run_summary.json"' in script
+    assert 'landmark_dir="$selected_root/$(jq -r' in script
+    assert '--arg landmark_dir "$scale_root/landmarks"' not in script
+
+
 def test_2d_experiment_failure_does_not_publish_partial_case(
     tmp_path: Path,
 ) -> None:
