@@ -20,6 +20,10 @@ KEYPOINT_ROLES = (
 )
 
 _SPINE_ROLES = ("spine_rear", "spine_front")
+TRAJECTORY_SCHEMA = "qianji.keypoint_trajectory_2d"
+SUPPORTED_TRAJECTORY_VERSIONS = frozenset({"1.2.0", "1.3.0"})
+IMAGE_COORDINATE_SYSTEM = "image_pixels_top_left_origin_x_right_y_down"
+TIMESTAMP_ABSOLUTE_TOLERANCE_S = 1e-6
 
 
 @dataclass(frozen=True)
@@ -120,8 +124,15 @@ def _spine_geometry(frame: dict) -> tuple[np.ndarray, np.ndarray, float]:
 
 
 def _validate_trajectory(trajectory: dict) -> list[dict]:
-    if trajectory.get("schema") != "qianji.keypoint_trajectory_2d":
+    if trajectory.get("schema") != TRAJECTORY_SCHEMA:
         raise ValueError("unsupported trajectory schema")
+    if trajectory.get("schema_version") not in SUPPORTED_TRAJECTORY_VERSIONS:
+        raise ValueError("unsupported trajectory schema_version")
+    if trajectory.get("coordinate_system") != IMAGE_COORDINATE_SYSTEM:
+        raise ValueError(
+            "trajectory coordinate_system must be "
+            f"{IMAGE_COORDINATE_SYSTEM!r}"
+        )
     video = trajectory.get("video")
     frames = trajectory.get("frames")
     if not isinstance(video, dict) or not isinstance(frames, list) or not frames:
@@ -138,9 +149,21 @@ def _validate_trajectory(trajectory: dict) -> list[dict]:
     if frame_count != len(frames):
         raise ValueError("video frame_count does not match frames")
 
+    timestamps = []
     for expected_idx, frame in enumerate(frames):
         if not isinstance(frame, dict) or frame.get("frame_idx") != expected_idx:
             raise ValueError("trajectory frames must be contiguous from zero")
+        try:
+            timestamp = float(frame["timestamp_s"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"frame {expected_idx} timestamp_s must be finite"
+            ) from error
+        if not math.isfinite(timestamp):
+            raise ValueError(
+                f"frame {expected_idx} timestamp_s must be finite"
+            )
+        timestamps.append(timestamp)
         points = frame.get("keypoints")
         if not isinstance(points, dict):
             raise ValueError(f"frame {expected_idx} keypoints must be an object")
@@ -161,6 +184,22 @@ def _validate_trajectory(trajectory: dict) -> list[dict]:
                 raise ValueError(
                     f"frame {expected_idx} {role} has malformed valid data"
                 )
+    if any(
+        current <= previous
+        for previous, current in zip(timestamps, timestamps[1:])
+    ):
+        raise ValueError("trajectory timestamps must be strictly increasing")
+    for frame_idx, timestamp in enumerate(timestamps):
+        expected = frame_idx / fps
+        if not math.isclose(
+            timestamp,
+            expected,
+            rel_tol=0.0,
+            abs_tol=TIMESTAMP_ABSOLUTE_TOLERANCE_S,
+        ):
+            raise ValueError(
+                f"frame {frame_idx} timestamp_s must match frame_idx/fps"
+            )
     return frames
 
 
@@ -290,7 +329,7 @@ def lift_trajectory(
             ]
         output_frames.append(
             {
-                "time": float(frame.get("timestamp_s", frame_idx / trajectory["video"]["fps"])),
+                "time": float(frame["timestamp_s"]),
                 "keypoints": output_points,
             }
         )
@@ -326,6 +365,12 @@ def lift_trajectory(
         "metric_depth_observed": False,
         "camera_calibrated": False,
         "global_translation_preserved": False,
+        "input_contract": {
+            "schema": trajectory["schema"],
+            "schema_version": trajectory["schema_version"],
+            "coordinate_system": trajectory["coordinate_system"],
+            "timestamp_basis": "frame_idx/fps",
+        },
         "reference_frame": reference_frame,
         "motion_scale": float(motion_scale),
         "frame_count": len(frames),
