@@ -273,6 +273,22 @@ def test_control_motion_validator_rejects_semantic_errors(
         )
 
 
+def test_control_motion_accepts_exact_roles_in_json_independent_order() -> None:
+    motion = _control_motion()
+    for frame in motion["frames"]:
+        frame["keypoints"] = dict(
+            sorted(frame["keypoints"].items())
+        )
+
+    validated = validate_control_motion(
+        motion,
+        expected_frames=3,
+        expected_fps=30.0,
+    )
+
+    assert validated.positions.shape == (3, 6, 3)
+
+
 def test_renderer_outputs_visible_four_view_30fps_motion(tmp_path: Path) -> None:
     site_names, times, positions = _arrays(frames=2)
     robot = _robot()

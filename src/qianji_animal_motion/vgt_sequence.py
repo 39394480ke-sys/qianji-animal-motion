@@ -58,7 +58,10 @@ def validate_control_motion(
         if not isinstance(frame, dict):
             raise ValueError(f"control frame {frame_idx} must be an object")
         points = frame.get("keypoints")
-        if not isinstance(points, dict) or tuple(points) != KEYPOINT_ROLES:
+        if (
+            not isinstance(points, dict)
+            or set(points) != set(KEYPOINT_ROLES)
+        ):
             raise ValueError(
                 f"control frame {frame_idx} must contain the exact six control roles"
             )
