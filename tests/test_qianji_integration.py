@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -8,27 +9,49 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 
 ROOT = Path(__file__).parents[1]
 PINNED_QIANJI_COMMIT = "3f3676c6cb7c198f7c9c43ce0b002f61d3d524a8"
+VENDORED_QIANJI_ROOT = (
+    ROOT / "tests/fixtures/qianji_converter_3f3676c"
+)
+PINNED_FILE_HASHES = {
+    "mujoco_builder/json2xml_v7_perrod.py": (
+        "77ebb0857042b48556abff65f54c7e51c7beec94cc468cf2ba8c2a655c4f77d4"
+    ),
+    "mujoco_builder/robot_config.py": (
+        "176699944ecfd0d1f597e86eafcf45d7cbc28f35213e53c8579a9058eee9cf19"
+    ),
+    "LICENSE": (
+        "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    ),
+}
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_pinned_qianji_converter_preserves_slide_and_weld_contract(
     tmp_path: Path,
 ) -> None:
     qianji_value = os.environ.get("QIANJI_INTEGRATION_ROOT")
-    if not qianji_value:
-        pytest.skip("QIANJI_INTEGRATION_ROOT is only set in the integration job")
-    qianji_root = Path(qianji_value).resolve()
-    commit = subprocess.run(
-        ["git", "-C", str(qianji_root), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    assert commit == PINNED_QIANJI_COMMIT
+    qianji_root = (
+        VENDORED_QIANJI_ROOT
+        if qianji_value is None
+        else Path(qianji_value).resolve()
+    )
+    if qianji_value is not None:
+        commit = subprocess.run(
+            ["git", "-C", str(qianji_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assert commit == PINNED_QIANJI_COMMIT
+    for relative, expected_hash in PINNED_FILE_HASHES.items():
+        assert _sha256(qianji_root / relative) == expected_hash
 
     robot_path = (
         ROOT

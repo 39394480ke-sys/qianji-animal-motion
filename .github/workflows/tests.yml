@@ -35,12 +35,5 @@ jobs:
           cache: pip
       - name: Install project
         run: python -m pip install --editable ".[dev]"
-      - name: Check out pinned QianJi
-        run: |
-          git clone https://github.com/muyuan-ma/QianJi.git "$RUNNER_TEMP/QianJi"
-          git -C "$RUNNER_TEMP/QianJi" checkout 3f3676c6cb7c198f7c9c43ce0b002f61d3d524a8
-          test -z "$(git -C "$RUNNER_TEMP/QianJi" status --porcelain)"
-      - name: Run real converter contract test
-        env:
-          QIANJI_INTEGRATION_ROOT: ${{ runner.temp }}/QianJi
+      - name: Run pinned QianJi converter contract test
         run: python -m pytest tests/test_qianji_integration.py

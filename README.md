@@ -360,8 +360,9 @@ pytest
 ```
 
 GitHub Actions 会在 push 和 pull request 上使用 Python 3.12 跑完整测试，
-并另行检出固定 QianJi commit，使用真实 converter 验证 slide axis、控制范围
-和 30 根杆的 weld 端点合同。
+并执行来自固定 QianJi commit 的逐字节校验 converter 快照，验证 slide axis、
+控制范围和 30 根杆的 weld 端点合同；快照保留上游 Apache-2.0 许可证和源文件
+SHA-256。
 
 ## 与 QianJi 集成
 
