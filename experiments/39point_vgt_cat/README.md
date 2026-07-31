@@ -44,6 +44,7 @@ The selected result is copied into the stable `landmarks/`, `control/`,
 2.5D lifting, control mapping, and desired controls. It independently derives
 control errors, frame statuses, feasible fractions, NPZ rod limits, and checks
 the selected XML slide axes, actuators, and weld topology. Formal publication
-also requires unchanged clean repository, QianJi, tool, and input provenance.
+also requires unchanged clean repository, QianJi, tool, input, project-Python,
+and QianJi/Mamba-Python provenance.
 Automated acceptance does not replace human visual review of a newly generated
 version.

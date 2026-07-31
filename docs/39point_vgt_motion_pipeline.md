@@ -136,7 +136,7 @@ QianJi 的 `feasible_site_targets.npz` 被严格校验并重新打包为
 严格自动验收案例位于：
 
 ```text
-outputs/experiments/39point_vgt_cat_v6
+outputs/experiments/39point_vgt_cat_v7
 ```
 
 最终选择 `scale_010_motion_informed_base_c010`：
@@ -163,15 +163,17 @@ marginal、12 unreachable，最大误差 0.05277 m。motion-informed + 10% 收�
 
 Desired 控制目标与 QianJi projected 控制目标是不同文件和不同哈希。最终
 `vgt_motion.npz` SHA-256 为
-`199d640c60f62b650b8ce8b4799df8c3aa6afa228d3438648caa068338b67736`。
+`16aafb660f98c2ccb29b7b0a8fbf08dbf43444b252a5f8c70f69b8ed817c3bc0`。
 
 `final_acceptance_report.json` 的 15 项自动检查全部为 `passed: true`。
 验收器现在从原始 H5 确定性重放 39 点观测、中性地标、2.5D、control map
 和 desired control，再独立重算 reachability；修改任一有效 XYZ、lateral
 分量、控制映射或同形状 desired 轨迹都会失败。v5 的人工视觉验收已经通过；
-v6 对新增身份模糊帧采用保守的中性替代，抽取检查未发现结构缺失或爆点。由于
-v6 的 194-201 帧与 v5 有可见差异，PR 在这组新帧完成最终人工复核前保持
-Draft。v5 不被覆盖，继续保留为前一份通过记录。
+v6 对新增身份模糊帧采用保守的中性替代，抽取检查未发现结构缺失或爆点。v7
+在此基础上补全项目 Python 与 QianJi/Mamba Python 的双环境 provenance；
+两个版本的二维预览、VGT 预览和静态图逐字节相同，VGT 节点位置最大数值差为
+`1.24e-12 m`。由于 194-201 帧与 v5 有可见差异，PR 在这组新帧完成最终人工
+复核前保持 Draft。v5、v6 均不被覆盖，继续保留为前序记录。
 
 ## 一键运行
 
@@ -180,15 +182,16 @@ uv pip install --python .venv/bin/python -e .
 
 ANIMAL_DATA_ROOT="/absolute/qianji-animal-motion" \
 QIANJI_ROOT="/absolute/QianJi" \
-OUTPUT_ROOT="$PWD/outputs/experiments/39point_vgt_cat_v6" \
+OUTPUT_ROOT="$PWD/outputs/experiments/39point_vgt_cat_v7" \
 bash experiments/39point_vgt_cat/run_experiment.sh
 ```
 
 输出目录必须不存在。脚本先在同级隐藏 staging 目录中构建整个案例，失败时
 清理，全部通过后才原子发布到 `OUTPUT_ROOT`。脚本对 QianJi 只读，所有收缩
 robot 和 morphology robot 都写入实验目录。最终记录两个仓库 commit、dirty
-状态、输入和脚本哈希、Python 包版本和真实调用参数；正式运行要求两个仓库
-从开始到结束保持 clean 且内容不变，最后再运行 `verify_case.py`。
+状态、输入和脚本哈希、项目 Python 与 QianJi/Mamba Python 的解释器及包版本，
+以及真实调用参数；正式运行要求两个仓库和两套 Python 环境从开始到结束保持
+不变，并要求两个仓库 clean，最后再运行 `verify_case.py`。
 
 ## 完成标准
 
