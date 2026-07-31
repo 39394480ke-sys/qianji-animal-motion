@@ -24,3 +24,33 @@ jobs:
         run: python -m pip install --editable ".[dev]"
       - name: Run tests
         run: python -m pytest
+
+  qianji-integration:
+    runs-on: ubuntu-latest
+    env:
+      QIANJI_REPO_TOKEN: ${{ secrets.QIANJI_REPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install project
+        run: python -m pip install --editable ".[dev]"
+      - name: Check out pinned private QianJi
+        if: env.QIANJI_REPO_TOKEN != ''
+        uses: actions/checkout@v7
+        with:
+          repository: muyuan-ma/QianJi
+          ref: 3f3676c6cb7c198f7c9c43ce0b002f61d3d524a8
+          token: ${{ env.QIANJI_REPO_TOKEN }}
+          path: qianji-private
+      - name: Run real pinned converter contract test
+        if: env.QIANJI_REPO_TOKEN != ''
+        env:
+          QIANJI_INTEGRATION_ROOT: ${{ github.workspace }}/qianji-private
+        run: python -m pytest tests/test_qianji_integration.py
+      - name: Report unavailable private integration
+        if: env.QIANJI_REPO_TOKEN == ''
+        run: |
+          echo "::notice::Set QIANJI_REPO_TOKEN to run the private QianJi integration in Actions."
