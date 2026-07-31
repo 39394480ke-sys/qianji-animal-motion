@@ -131,7 +131,10 @@ def _spine_geometry(frame: dict) -> tuple[np.ndarray, np.ndarray, float]:
     ]
     if valid_feet:
         ventral = np.mean(valid_feet, axis=0) - (rear + front) / 2.0
-        if float(up @ ventral) > 0.0:
+        ventral_alignment = float(up @ ventral)
+        if ventral_alignment > 1e-6 * torso_length:
+            up = -up
+        elif abs(ventral_alignment) <= 1e-6 * torso_length and up[1] > 0.0:
             up = -up
     elif up[1] > 0.0:
         up = -up
