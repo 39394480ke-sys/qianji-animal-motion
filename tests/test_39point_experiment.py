@@ -1089,6 +1089,16 @@ def _build_complete_case(root: Path) -> None:
                     "scipy": "fixture",
                 },
             },
+            "qianji_environment": {
+                "python_executable": "/fixture/qianji/python",
+                "python_version": "3.10.0",
+                "packages": {
+                    "mujoco": "fixture",
+                    "numpy": "fixture",
+                    "pandas": None,
+                    "scipy": "fixture",
+                },
+            },
         },
     )
 
@@ -1527,6 +1537,8 @@ def test_verifier_checks_xml_rod_topology(
     [
         "missing_invocation",
         "missing_required_package",
+        "missing_qianji_environment",
+        "missing_qianji_package",
         "malformed_script_hash",
     ],
 )
@@ -1542,6 +1554,10 @@ def test_verifier_rejects_incomplete_experiment_provenance(
         provenance.pop("invocation")
     elif mutation == "missing_required_package":
         provenance["environment"]["packages"].pop("scipy")
+    elif mutation == "missing_qianji_environment":
+        provenance.pop("qianji_environment")
+    elif mutation == "missing_qianji_package":
+        provenance["qianji_environment"]["packages"].pop("numpy")
     else:
         provenance["scripts"][0]["sha256"] = "not-a-sha256"
     _write_json(provenance_path, provenance)

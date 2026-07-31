@@ -1469,6 +1469,7 @@ def verify_case(case_root: Path) -> dict:
         inputs = record.get("inputs")
         invocation = record.get("invocation")
         environment = record.get("environment")
+        qianji_environment = record.get("qianji_environment")
         if (
             not isinstance(scripts, list)
             or len(scripts) < 9
@@ -1499,22 +1500,38 @@ def verify_case(case_root: Path) -> dict:
             )
             or not isinstance(invocation.get("working_directory"), str)
             or not invocation["working_directory"]
-            or not isinstance(environment, dict)
-            or not isinstance(environment.get("python_executable"), str)
-            or not environment["python_executable"]
-            or not isinstance(environment.get("python_version"), str)
         ):
-            raise ValueError("script/environment provenance is incomplete")
-        packages = environment.get("packages")
-        if not isinstance(packages, dict) or any(
-            package not in packages
-            or (
-                packages[package] is not None
-                and not isinstance(packages[package], str)
-            )
-            for package in ("mujoco", "numpy", "pandas", "scipy")
+            raise ValueError("script/invocation provenance is incomplete")
+        for label, python_environment in (
+            ("project", environment),
+            ("QianJi", qianji_environment),
         ):
-            raise ValueError("Python package provenance is incomplete")
+            if (
+                not isinstance(python_environment, dict)
+                or not isinstance(
+                    python_environment.get("python_executable"), str
+                )
+                or not python_environment["python_executable"]
+                or not isinstance(
+                    python_environment.get("python_version"), str
+                )
+                or not python_environment["python_version"]
+            ):
+                raise ValueError(
+                    f"{label} Python environment provenance is incomplete"
+                )
+            packages = python_environment.get("packages")
+            if not isinstance(packages, dict) or any(
+                package not in packages
+                or (
+                    packages[package] is not None
+                    and not isinstance(packages[package], str)
+                )
+                for package in ("mujoco", "numpy", "pandas", "scipy")
+            ):
+                raise ValueError(
+                    f"{label} Python package provenance is incomplete"
+                )
         verified_inputs = {
             _verified_record(
                 root,
@@ -1551,6 +1568,8 @@ def verify_case(case_root: Path) -> dict:
             "qianji_commit": record["qianji"]["commit"],
             "qianji_dirty": record["qianji"]["dirty"],
             "invocation": invocation["argv"],
+            "project_python": environment["python_executable"],
+            "qianji_python": qianji_environment["python_executable"],
             "verified_inputs": len(verified_inputs),
         }
 
