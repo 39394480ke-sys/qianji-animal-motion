@@ -99,6 +99,7 @@ PROVENANCE_ARGS=(
   --invocation-arg "QIANJI_ROOT=${QIANJI_ROOT}"
   --invocation-arg "OUTPUT_ROOT=${FINAL_OUTPUT_ROOT}"
   --working-directory "$REPO_ROOT"
+  --qianji-python-command "mamba run -n biomimic python"
 )
 PROVENANCE_CLEAN_FLAG="--require-clean"
 if [[ "${ALLOW_DIRTY_EXPERIMENT:-0}" == "1" ]]; then
