@@ -365,6 +365,29 @@ def test_observed_ambiguous_crossing_does_not_flip_later_identity() -> None:
     assert resolution.states.tolist() == [0, 0, 0, 0]
 
 
+def test_ambiguous_geometry_is_not_used_as_the_next_identity_reference() -> None:
+    def leg_sequence(x_positions: list[float]) -> np.ndarray:
+        sequence = np.zeros((len(x_positions), 3, 3), dtype=float)
+        sequence[:, :, 2] = 1.0
+        for frame, x_position in enumerate(x_positions):
+            sequence[frame, :, 0] = x_position
+        return sequence
+
+    left = leg_sequence([0.0, 38.2496, 10.1673, 2.0])
+    right = leg_sequence([20.0, 32.4051, 22.6751, 22.0])
+
+    resolution = resolve_leg_identities(
+        left,
+        right,
+        scale=10.0,
+        anchor_frame=0,
+        anchor_state=0,
+    )
+
+    assert resolution.ambiguous.tolist() == [False, True, False, False]
+    assert resolution.states.tolist() == [0, 0, 0, 0]
+
+
 def test_low_confidence_point_is_null_without_interpolation() -> None:
     predictions = _prediction_dataframe()
     predictions.loc[

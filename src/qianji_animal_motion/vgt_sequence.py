@@ -11,6 +11,15 @@ import numpy as np
 from qianji_animal_motion.lift_3d import KEYPOINT_ROLES
 
 
+REACHABILITY_THRESHOLDS = {
+    "feasible_keypoint_error_m": 0.02,
+    "feasible_edge_violation_m": 0.0001,
+    "feasible_clipped_fraction": 0.05,
+    "marginal_keypoint_error_m": 0.05,
+    "marginal_clipped_fraction": 0.15,
+}
+
+
 @dataclass(frozen=True)
 class VgtSequence:
     site_names: tuple[str, ...]
@@ -241,6 +250,234 @@ def compute_rod_constraint_metrics(
         "frame_max_edge_violation_m": frame_max.astype(float).tolist(),
         "frame_violated_rod_fraction": frame_fraction.astype(float).tolist(),
     }
+
+
+def recompute_reachability_metrics(
+    desired: ControlMotion,
+    projected: ControlMotion,
+    sequence: VgtSequence,
+    robot: dict,
+) -> dict:
+    """Independently derive QianJi control errors, geometry, and frame status."""
+    if (
+        desired.positions.shape != projected.positions.shape
+        or desired.positions.shape[:2]
+        != (len(sequence.times), len(KEYPOINT_ROLES))
+    ):
+        raise ValueError("control motions do not match the VGT sequence")
+    errors = np.linalg.norm(projected.positions - desired.positions, axis=2)
+    geometry = compute_rod_constraint_metrics(
+        sequence,
+        robot,
+        violation_epsilon_m=1e-8,
+    )
+    frame_edge = np.asarray(
+        geometry["frame_max_edge_violation_m"],
+        dtype=float,
+    )
+    frame_clipped = np.asarray(
+        geometry["frame_violated_rod_fraction"],
+        dtype=float,
+    )
+    records = []
+    for frame_idx in range(len(sequence.times)):
+        max_error = float(np.max(errors[frame_idx]))
+        mean_error = float(np.mean(errors[frame_idx]))
+        edge_error = float(frame_edge[frame_idx])
+        clipped_fraction = float(frame_clipped[frame_idx])
+        if (
+            max_error
+            <= REACHABILITY_THRESHOLDS["feasible_keypoint_error_m"]
+            and edge_error
+            <= REACHABILITY_THRESHOLDS["feasible_edge_violation_m"]
+            and clipped_fraction
+            <= REACHABILITY_THRESHOLDS["feasible_clipped_fraction"]
+        ):
+            status = "feasible"
+        elif (
+            max_error
+            <= REACHABILITY_THRESHOLDS["marginal_keypoint_error_m"]
+            or clipped_fraction
+            <= REACHABILITY_THRESHOLDS["marginal_clipped_fraction"]
+        ):
+            status = "marginal"
+        else:
+            status = "unreachable"
+        records.append(
+            {
+                "frame": frame_idx,
+                "time": float(sequence.times[frame_idx]),
+                "status": status,
+                "max_keypoint_error_m": max_error,
+                "mean_keypoint_error_m": mean_error,
+                "keypoint_errors_m": {
+                    role: float(errors[frame_idx, role_idx])
+                    for role_idx, role in enumerate(KEYPOINT_ROLES)
+                },
+                "max_edge_violation_m": edge_error,
+                "estimated_clipped_fraction": clipped_fraction,
+            }
+        )
+    status_counts = {
+        status: sum(record["status"] == status for record in records)
+        for status in ("feasible", "marginal", "unreachable")
+    }
+    count = len(records)
+    summary = {
+        "frames": count,
+        "status_counts": status_counts,
+        "feasible_fraction": status_counts["feasible"] / count,
+        "marginal_or_feasible_fraction": (
+            status_counts["feasible"] + status_counts["marginal"]
+        )
+        / count,
+        "max_keypoint_error_m": max(
+            record["max_keypoint_error_m"] for record in records
+        ),
+        "mean_keypoint_error_m": float(
+            np.mean(
+                [record["mean_keypoint_error_m"] for record in records]
+            )
+        ),
+        "max_edge_violation_m": max(
+            record["max_edge_violation_m"] for record in records
+        ),
+        "max_estimated_clipped_fraction": max(
+            record["estimated_clipped_fraction"] for record in records
+        ),
+        "mean_estimated_clipped_fraction": float(
+            np.mean(
+                [
+                    record["estimated_clipped_fraction"]
+                    for record in records
+                ]
+            )
+        ),
+    }
+    return {
+        "thresholds": dict(REACHABILITY_THRESHOLDS),
+        "summary": summary,
+        "frames": records,
+        "geometry": geometry,
+    }
+
+
+def _same_number(actual: object, expected: float, label: str) -> None:
+    try:
+        value = float(actual)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{label} is malformed") from error
+    if not math.isfinite(value) or not math.isclose(
+        value,
+        expected,
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    ):
+        raise ValueError(f"{label} differs from independently recomputed value")
+
+
+def validate_reachability_report(
+    report: dict,
+    recomputed: dict,
+    desired: ControlMotion,
+    projected: ControlMotion,
+) -> None:
+    """Reject a QianJi report that disagrees with independent artifacts."""
+    if report.get("schema") != "qianji-keypoint-reachability-report-v1":
+        raise ValueError("reachability report schema is unsupported")
+    thresholds = report.get("thresholds")
+    if not isinstance(thresholds, dict) or set(thresholds) != set(
+        REACHABILITY_THRESHOLDS
+    ):
+        raise ValueError("reachability thresholds are missing or changed")
+    for name, expected in REACHABILITY_THRESHOLDS.items():
+        _same_number(thresholds[name], expected, f"reachability threshold {name}")
+
+    summary = report.get("summary")
+    expected_summary = recomputed["summary"]
+    if not isinstance(summary, dict) or set(summary) != set(expected_summary):
+        raise ValueError("reachability summary contract differs")
+    if summary.get("frames") != expected_summary["frames"]:
+        raise ValueError("reachability summary frame count differs")
+    if summary.get("status_counts") != expected_summary["status_counts"]:
+        raise ValueError("reachability status counts differ")
+    for name in set(expected_summary) - {"frames", "status_counts"}:
+        _same_number(
+            summary[name],
+            expected_summary[name],
+            f"reachability summary {name}",
+        )
+
+    frames = report.get("frames")
+    if not isinstance(frames, list) or len(frames) != len(
+        recomputed["frames"]
+    ):
+        raise ValueError("reachability frame reports differ")
+    for frame_idx, (actual, expected) in enumerate(
+        zip(frames, recomputed["frames"], strict=True)
+    ):
+        if (
+            not isinstance(actual, dict)
+            or actual.get("frame") != frame_idx
+            or actual.get("status") != expected["status"]
+        ):
+            raise ValueError(f"reachability frame {frame_idx} status differs")
+        for name in (
+            "time",
+            "max_keypoint_error_m",
+            "mean_keypoint_error_m",
+            "max_edge_violation_m",
+            "estimated_clipped_fraction",
+        ):
+            _same_number(
+                actual.get(name),
+                expected[name],
+                f"reachability frame {frame_idx} {name}",
+            )
+        keypoint_errors = actual.get("keypoint_errors_m")
+        if (
+            not isinstance(keypoint_errors, dict)
+            or set(keypoint_errors) != set(KEYPOINT_ROLES)
+        ):
+            raise ValueError(
+                f"reachability frame {frame_idx} keypoint errors differ"
+            )
+        for role in KEYPOINT_ROLES:
+            _same_number(
+                keypoint_errors[role],
+                expected["keypoint_errors_m"][role],
+                f"reachability frame {frame_idx} role {role} error",
+            )
+        for label, motion in (
+            ("target_keypoints", desired),
+            ("projected_keypoints", projected),
+        ):
+            points = actual.get(label)
+            if not isinstance(points, dict) or set(points) != set(KEYPOINT_ROLES):
+                raise ValueError(
+                    f"reachability frame {frame_idx} {label} roles differ"
+                )
+            for role_idx, role in enumerate(KEYPOINT_ROLES):
+                value = np.asarray(points[role], dtype=float)
+                expected_value = np.concatenate(
+                    (
+                        motion.positions[frame_idx, role_idx],
+                        [motion.confidences[frame_idx, role_idx]],
+                    )
+                )
+                if (
+                    value.shape != (4,)
+                    or not np.isfinite(value).all()
+                    or not np.allclose(
+                        value,
+                        expected_value,
+                        rtol=0.0,
+                        atol=1e-9,
+                    )
+                ):
+                    raise ValueError(
+                        f"reachability frame {frame_idx} {label} differs"
+                    )
 
 
 def _validate_rods(

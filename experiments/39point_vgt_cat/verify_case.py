@@ -15,9 +15,15 @@ from typing import Any, Callable, Sequence
 
 import cv2
 import numpy as np
+import pandas as pd
 
-from qianji_animal_motion.keypoints_39 import validate_39point_observation
+from qianji_animal_motion.keypoints_39 import (
+    build_39point_observation,
+    validate_39point_observation,
+)
 from qianji_animal_motion.lift_39 import (
+    build_neutral_landmarks_39,
+    lift_39point_trajectory,
     validate_lifted_39_motion,
     validate_neutral_landmarks_39,
 )
@@ -26,13 +32,18 @@ from qianji_animal_motion.lift_3d import (
     _validate_trajectory,
 )
 from qianji_animal_motion.vgt_control import (
+    build_target_control_motion,
+    build_vgt_control_map,
     infer_uniform_contraction_fraction,
     validate_vgt_control_map,
 )
+from qianji_animal_motion.semantic_mapping import VideoInfo
 from qianji_animal_motion.vgt_sequence import (
     compute_rod_constraint_metrics,
     load_and_validate_vgt_sequence,
+    recompute_reachability_metrics,
     validate_control_pair_against_sequence,
+    validate_reachability_report,
 )
 
 
@@ -94,6 +105,47 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _assert_replay_equal(actual: Any, expected: Any, label: str) -> None:
+    """Compare deterministic JSON-like artifacts with strict float tolerance."""
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        if set(actual) != set(expected):
+            raise ValueError(f"{label} keys differ during independent replay")
+        for key in actual:
+            _assert_replay_equal(
+                actual[key],
+                expected[key],
+                f"{label}.{key}",
+            )
+        return
+    if isinstance(actual, list) and isinstance(expected, list):
+        if len(actual) != len(expected):
+            raise ValueError(f"{label} length differs during independent replay")
+        for index, pair in enumerate(zip(actual, expected, strict=True)):
+            _assert_replay_equal(
+                pair[0],
+                pair[1],
+                f"{label}[{index}]",
+            )
+        return
+    numeric = (
+        isinstance(actual, (int, float))
+        and not isinstance(actual, bool)
+        and isinstance(expected, (int, float))
+        and not isinstance(expected, bool)
+    )
+    if numeric:
+        if not math.isclose(
+            float(actual),
+            float(expected),
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(f"{label} differs during independent replay")
+        return
+    if actual != expected:
+        raise ValueError(f"{label} differs during independent replay")
 
 
 def _resolved_artifact(
@@ -403,6 +455,53 @@ def verify_case(case_root: Path) -> dict:
             for key in ("frame_idx", "front_assignment", "rear_assignment")
         }:
             raise ValueError("39-point identity anchor differs from manifest")
+        predictions_path = source_paths.get("predictions")
+        if predictions_path is None:
+            predictions_path = _verified_record(
+                root,
+                manifest["sources"]["predictions"],
+                "input predictions",
+                require_relative=False,
+            )
+        video = manifest["video"]
+        prediction_contract = manifest.get("predictions")
+        if not isinstance(prediction_contract, dict):
+            raise ValueError("prediction contract is missing from input manifest")
+        recomputed = build_39point_observation(
+            pd.read_hdf(predictions_path),
+            VideoInfo(
+                width=int(video["width"]),
+                height=int(video["height"]),
+                fps=float(video["fps"]),
+                frame_count=int(video["frame_count"]),
+            ),
+            individual=str(prediction_contract["individual"]),
+            confidence_threshold=float(quality["confidence_threshold"]),
+            anchor_frame=int(manifest["reference_frame"]),
+            front_anchor=str(identity["front_assignment"]),
+            rear_anchor=str(identity["rear_assignment"]),
+        )
+        recomputed.trajectory["source_lineage"] = dict(expected)
+        recomputed.report["source_lineage"] = dict(expected)
+        _assert_replay_equal(
+            observation,
+            recomputed.trajectory,
+            "39-point observation",
+        )
+        _assert_replay_equal(
+            quality,
+            recomputed.report,
+            "39-point quality report",
+        )
+        if (
+            recomputed.report["scorer"] != prediction_contract.get("scorer")
+            or prediction_contract.get("bodyparts")
+            != list(observation["roles"])
+            or prediction_contract.get("coordinates")
+            != ["x", "y", "likelihood"]
+        ):
+            raise ValueError("prediction manifest differs from replayed H5")
+        evidence["independent_h5_replay"] = True
         return evidence
 
     _check_record(checks, "observation_39_roles", observation_roles)
@@ -419,11 +518,23 @@ def verify_case(case_root: Path) -> dict:
         neutral = payload("landmarks/neutral_landmarks_39.json")
         motion_39 = payload("landmarks/keypoint_motion_3d_39.json")
         lift_report = payload("landmarks/lift_39_report.json")
+        corrected_path = source_paths.get("corrected_spine")
+        if corrected_path is None:
+            corrected_path = _verified_record(
+                root,
+                payload("input_manifest.json").get("sources", {}).get(
+                    "corrected_spine"
+                ),
+                "input corrected_spine",
+                require_relative=False,
+            )
+        corrected_spine = _load_json(corrected_path)
         validate_neutral_landmarks_39(neutral)
         evidence = validate_lifted_39_motion(
             motion_39,
             lift_report,
             observation=observation,
+            corrected_spine=corrected_spine,
             neutral_landmarks=neutral,
             expected_frames=EXPECTED_FRAMES,
         )
@@ -469,7 +580,59 @@ def verify_case(case_root: Path) -> dict:
             )
         if verified != expected_paths:
             raise ValueError("lift sources do not match canonical parent artifacts")
+        recomputed_neutral = build_neutral_landmarks_39(
+            observation,
+            corrected_spine,
+            _load_json(expected_paths["robot"]),
+            _load_json(expected_paths["rig"]),
+            reference_frame=int(lift_report["reference_frame"]),
+        )
+        _assert_replay_equal(
+            {key: value for key, value in neutral.items() if key != "sources"},
+            recomputed_neutral,
+            "neutral 39-point landmarks",
+        )
+        recomputed_lift = lift_39point_trajectory(
+            observation,
+            corrected_spine,
+            recomputed_neutral,
+            motion_scale=float(lift_report["motion_scale"]),
+        )
+        _assert_replay_equal(
+            motion_39,
+            recomputed_lift.motion,
+            "lifted 39-point motion",
+        )
+        _assert_replay_equal(
+            {
+                key: value
+                for key, value in lift_report.items()
+                if key != "sources"
+            },
+            recomputed_lift.report,
+            "39-point lift report",
+        )
+        lateral = np.asarray(recomputed_neutral["basis"]["lateral"], dtype=float)
+        for frame in motion_39["frames"]:
+            for role, value in frame["keypoints"].items():
+                neutral_xyz = np.asarray(
+                    recomputed_neutral["landmarks"][role]["xyz"],
+                    dtype=float,
+                )
+                lateral_delta = float(
+                    (np.asarray(value[:3], dtype=float) - neutral_xyz) @ lateral
+                )
+                if not math.isclose(
+                    lateral_delta,
+                    0.0,
+                    rel_tol=0.0,
+                    abs_tol=1e-12,
+                ):
+                    raise ValueError(
+                        "valid 2.5D motion contains an observed lateral component"
+                    )
         evidence["verified_source_hashes"] = len(verified)
+        evidence["independent_lift_replay"] = True
         return evidence
 
     _check_record(checks, "body_relative_3d_39", neutral_and_motion)
@@ -599,6 +762,16 @@ def verify_case(case_root: Path) -> dict:
             for actuator in xml_roots["robot_xml"].iter("position")
             if actuator.get("name")
         }
+        xml_sites = {
+            site.get("name")
+            for site in xml_roots["robot_xml"].iter("site")
+            if site.get("name")
+        }
+        welds = [
+            (weld.get("site1"), weld.get("site2"))
+            for weld in xml_roots["robot_xml"].iter("weld")
+        ]
+        expected_welds = set()
         for rod in rods:
             constraint = rod.get("constraint")
             if not isinstance(constraint, dict):
@@ -650,6 +823,35 @@ def verify_case(case_root: Path) -> dict:
                     raise ValueError(
                         f"XML joint {joint_name!r} limits differ from robot"
                     )
+                expected_axis = np.asarray(
+                    [0.0, 0.0, -1.0 if side == "left" else 1.0],
+                    dtype=float,
+                )
+                try:
+                    axis = np.asarray(
+                        [
+                            float(value)
+                            for value in joint.get("axis", "").split()
+                        ],
+                        dtype=float,
+                    )
+                except (AttributeError, ValueError) as error:
+                    raise ValueError(
+                        f"XML joint {joint_name!r} axis is malformed"
+                    ) from error
+                if (
+                    joint.get("type") != "slide"
+                    or axis.shape != (3,)
+                    or not np.allclose(
+                        axis,
+                        expected_axis,
+                        rtol=0.0,
+                        atol=1e-12,
+                    )
+                ):
+                    raise ValueError(
+                        f"XML joint {joint_name!r} axis differs from converter contract"
+                    )
                 if rod.get("actuated") is True:
                     actuator_name = f"act_{joint_name}"
                     actuator = xml_actuators.get(actuator_name)
@@ -681,6 +883,33 @@ def verify_case(case_root: Path) -> dict:
                             f"XML actuator {actuator_name!r} limits "
                             "differ from robot"
                         )
+                    if actuator.get("joint") != joint_name:
+                        raise ValueError(
+                            f"XML actuator {actuator_name!r} targets the wrong joint"
+                        )
+            rod_name = str(rod["name"])
+            left_tip = f"{rod_name}__s1_site"
+            right_tip = f"{rod_name}__s2_site"
+            left_port = (
+                f"anchor_{rod['site1']}_port_{rod_name}_left_site"
+            )
+            right_port = (
+                f"anchor_{rod['site2']}_port_{rod_name}_right_site"
+            )
+            expected_welds.update(
+                {
+                    (left_tip, left_port),
+                    (right_tip, right_port),
+                }
+            )
+            if not {left_tip, right_tip, left_port, right_port}.issubset(
+                xml_sites
+            ):
+                raise ValueError(
+                    f"XML rod {rod_name!r} endpoint sites are incomplete"
+                )
+        if len(welds) != 2 * EXPECTED_RODS or set(welds) != expected_welds:
+            raise ValueError("XML rod weld endpoints differ from robot topology")
         contraction = infer_uniform_contraction_fraction(robot)
         return {
             "sites": EXPECTED_SITES,
@@ -691,13 +920,37 @@ def verify_case(case_root: Path) -> dict:
     _check_record(checks, "robot_12_sites_30_rods", robot_contract)
 
     def control_boundary() -> dict:
-        nonlocal robot, rig
+        nonlocal robot, rig, neutral, motion_39
         if robot is None:
             robot = payload("initial_model/robot.json")
         if rig is None:
             rig = payload("initial_model/rig_keypoints.json")
+        if neutral is None:
+            neutral = payload("landmarks/neutral_landmarks_39.json")
+        if motion_39 is None:
+            motion_39 = payload("landmarks/keypoint_motion_3d_39.json")
         control = payload("control/vgt_control_map.json")
-        return validate_vgt_control_map(control, robot, rig)
+        evidence = validate_vgt_control_map(control, robot, rig)
+        recomputed_map = build_vgt_control_map(robot, rig, neutral)
+        _assert_replay_equal(
+            control,
+            recomputed_map,
+            "VGT control map",
+        )
+        recomputed_target, _transfer_report = build_target_control_motion(
+            motion_39,
+            neutral,
+            robot,
+            recomputed_map,
+        )
+        target = payload("control/target_control_keypoint_motion.json")
+        _assert_replay_equal(
+            target,
+            recomputed_target,
+            "desired VGT control motion",
+        )
+        evidence["independent_control_replay"] = True
+        return evidence
 
     _check_record(checks, "observation_control_split", control_boundary)
 
@@ -1125,7 +1378,39 @@ def verify_case(case_root: Path) -> dict:
                 expected_sites=EXPECTED_SITES,
                 expected_rods=EXPECTED_RODS,
             )
-        geometry = compute_rod_constraint_metrics(sequence, robot)
+        desired_motion, projected_motion = validate_control_pair_against_sequence(
+            desired,
+            projected,
+            sequence,
+            payload("initial_model/rig_keypoints.json"),
+            expected_frames=EXPECTED_FRAMES,
+            expected_fps=EXPECTED_FPS,
+        )
+        independent = recompute_reachability_metrics(
+            desired_motion,
+            projected_motion,
+            sequence,
+            robot,
+        )
+        validate_reachability_report(
+            qianji_report,
+            independent,
+            desired_motion,
+            projected_motion,
+        )
+        expected_recomputed = {
+            "thresholds": independent["thresholds"],
+            "summary": independent["summary"],
+        }
+        if (
+            summary != independent["summary"]
+            or selected.get("recomputed_reachability")
+            != expected_recomputed
+        ):
+            raise ValueError(
+                "selected reachability differs from independent recomputation"
+            )
+        geometry = independent["geometry"]
         if (
             geometry["max_edge_violation_m"] > MAX_EDGE_VIOLATION_M
             or geometry["max_violated_rod_fraction"] > MAX_CLIPPED_FRACTION
@@ -1177,9 +1462,11 @@ def verify_case(case_root: Path) -> dict:
                 or not isinstance(item.get("status_porcelain"), list)
                 or not isinstance(item.get("worktree_state_sha256"), str)
                 or len(item["worktree_state_sha256"]) != 64
+                or item.get("dirty") is not False
             ):
                 raise ValueError(f"{repository} provenance is incomplete")
         scripts = record.get("scripts")
+        inputs = record.get("inputs")
         invocation = record.get("invocation")
         environment = record.get("environment")
         if (
@@ -1193,6 +1480,16 @@ def verify_case(case_root: Path) -> dict:
                 or len(item["sha256"]) != 64
                 for item in scripts
             )
+            or not isinstance(inputs, list)
+            or len(inputs) < 6
+            or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("path"), str)
+                or not item["path"]
+                or not isinstance(item.get("sha256"), str)
+                or len(item["sha256"]) != 64
+                for item in inputs
+            )
             or not isinstance(invocation, dict)
             or not isinstance(invocation.get("argv"), list)
             or not invocation["argv"]
@@ -1203,6 +1500,8 @@ def verify_case(case_root: Path) -> dict:
             or not isinstance(invocation.get("working_directory"), str)
             or not invocation["working_directory"]
             or not isinstance(environment, dict)
+            or not isinstance(environment.get("python_executable"), str)
+            or not environment["python_executable"]
             or not isinstance(environment.get("python_version"), str)
         ):
             raise ValueError("script/environment provenance is incomplete")
@@ -1216,11 +1515,43 @@ def verify_case(case_root: Path) -> dict:
             for package in ("mujoco", "numpy", "pandas", "scipy")
         ):
             raise ValueError("Python package provenance is incomplete")
+        verified_inputs = {
+            _verified_record(
+                root,
+                item,
+                f"provenance input {index}",
+                require_relative=False,
+            )
+            for index, item in enumerate(inputs)
+        }
+        expected_sources = set(source_paths.values())
+        if not expected_sources.issubset(verified_inputs):
+            raise ValueError("provenance inputs omit a canonical case source")
+        initial_generation = payload(
+            "initial_model/base_robot_manifest.json"
+        ).get("qianji_generation", {})
+        if (
+            record["qianji"]["commit"]
+            != initial_generation.get("repository_commit")
+        ):
+            raise ValueError(
+                "QianJi provenance differs from frozen robot generation"
+            )
+        argv = invocation["argv"]
+        if (
+            argv[0] != "bash"
+            or len(argv) < 2
+            or not argv[1].endswith(
+                "experiments/39point_vgt_cat/run_experiment.sh"
+            )
+        ):
+            raise ValueError("provenance invocation is not the experiment entrypoint")
         return {
             "repository_commit": record["repository"]["commit"],
             "qianji_commit": record["qianji"]["commit"],
             "qianji_dirty": record["qianji"]["dirty"],
             "invocation": invocation["argv"],
+            "verified_inputs": len(verified_inputs),
         }
 
     _check_record(checks, "experiment_provenance", provenance)

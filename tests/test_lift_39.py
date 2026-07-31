@@ -344,6 +344,84 @@ def test_lift_moves_up_and_substitutes_invalid_without_lateral_motion() -> None:
     assert "interpolation" not in result.motion
 
 
+def test_invalid_non_reference_spine_frame_is_locally_neutralized() -> None:
+    robot, rig = _robot_rig()
+    coordinates = _coordinates()
+    frames = [
+        {
+            "frame_idx": frame_idx,
+            "timestamp_s": frame_idx / 30.0,
+            "keypoints": {
+                role: _point(*coordinates[role])
+                for role in SUPERANIMAL_QUADRUPED_39
+            },
+        }
+        for frame_idx in range(3)
+    ]
+    trajectory = _trajectory_39(frames)
+    corrected = _corrected_spine(
+        [((40.0, 40.0), (60.0, 40.0))] * 3
+    )
+    corrected["frames"][1]["keypoints"]["spine_front"].update(
+        {"valid": False, "x_px": None, "y_px": None}
+    )
+    neutral = build_neutral_landmarks_39(
+        trajectory,
+        corrected,
+        robot,
+        rig,
+        reference_frame=0,
+    )
+
+    result = lift_39point_trajectory(
+        trajectory,
+        corrected,
+        neutral,
+        motion_scale=1.0,
+    )
+
+    assert result.report["substitution_counts"]["invalid_spine_frame"] == 39
+    assert {
+        item["frame_idx"]
+        for item in result.report["substitutions"]
+        if item["reason"] == "invalid_spine_frame"
+    } == {1}
+    for role in SUPERANIMAL_QUADRUPED_39:
+        np.testing.assert_allclose(
+            result.motion["frames"][1]["keypoints"][role][:3],
+            neutral["landmarks"][role]["xyz"],
+        )
+        assert result.motion["frames"][1]["keypoints"][role][3] == 0.0
+        assert result.motion["frames"][2]["keypoints"][role][3] == (
+            0.0 if "antler" in role else 0.8
+        )
+    validate_lifted_39_motion(
+        result.motion,
+        result.report,
+        observation=trajectory,
+        corrected_spine=corrected,
+        neutral_landmarks=neutral,
+        expected_frames=3,
+    )
+
+
+def test_invalid_reference_spine_frame_is_rejected() -> None:
+    robot, rig = _robot_rig()
+    corrected = _corrected_spine()
+    corrected["frames"][0]["keypoints"]["spine_front"].update(
+        {"valid": False, "x_px": None, "y_px": None}
+    )
+
+    with pytest.raises(ValueError, match="valid spine"):
+        build_neutral_landmarks_39(
+            _trajectory_39(),
+            corrected,
+            robot,
+            rig,
+            reference_frame=0,
+        )
+
+
 def test_role_uses_nearest_valid_reference_instead_of_bad_raw_anchor() -> None:
     robot, rig = _robot_rig()
     coordinates = _coordinates()
@@ -458,6 +536,7 @@ def test_lift_validators_reject_anatomy_confidence_and_report_mismatch() -> None
         result.motion,
         result.report,
         observation=trajectory,
+        corrected_spine=corrected,
         neutral_landmarks=neutral,
         expected_frames=1,
     )
@@ -476,6 +555,7 @@ def test_lift_validators_reject_anatomy_confidence_and_report_mismatch() -> None
             invalid_motion,
             result.report,
             observation=trajectory,
+            corrected_spine=corrected,
             neutral_landmarks=neutral,
             expected_frames=1,
         )
@@ -487,6 +567,7 @@ def test_lift_validators_reject_anatomy_confidence_and_report_mismatch() -> None
             result.motion,
             missing_field,
             observation=trajectory,
+            corrected_spine=corrected,
             neutral_landmarks=neutral,
             expected_frames=1,
         )
@@ -498,6 +579,7 @@ def test_lift_validators_reject_anatomy_confidence_and_report_mismatch() -> None
             result.motion,
             mismatched_substitution,
             observation=trajectory,
+            corrected_spine=corrected,
             neutral_landmarks=neutral,
             expected_frames=1,
         )
@@ -510,6 +592,7 @@ def test_lift_validators_reject_anatomy_confidence_and_report_mismatch() -> None
             result.motion,
             result.report,
             observation=trajectory,
+            corrected_spine=corrected,
             neutral_landmarks=invalid_reference,
             expected_frames=1,
         )
@@ -521,6 +604,7 @@ def test_lift_validators_reject_anatomy_confidence_and_report_mismatch() -> None
             result.motion,
             missing_limit,
             observation=trajectory,
+            corrected_spine=corrected,
             neutral_landmarks=neutral,
             expected_frames=1,
         )

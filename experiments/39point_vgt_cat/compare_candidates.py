@@ -13,7 +13,9 @@ from typing import Sequence
 from qianji_animal_motion.vgt_sequence import load_and_validate_vgt_sequence
 from qianji_animal_motion.vgt_sequence import (
     compute_rod_constraint_metrics,
+    recompute_reachability_metrics,
     validate_control_pair_against_sequence,
+    validate_reachability_report,
 )
 from qianji_animal_motion.vgt_control import (
     infer_uniform_contraction_fraction,
@@ -153,7 +155,7 @@ def _candidate_record(candidate_root: Path) -> dict:
         fps = float(desired["fps"])
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("candidate desired motion fps is malformed") from error
-    validate_control_pair_against_sequence(
+    desired_motion, projected_motion = validate_control_pair_against_sequence(
         desired,
         projected,
         sequence,
@@ -161,6 +163,19 @@ def _candidate_record(candidate_root: Path) -> dict:
         expected_frames=frames,
         expected_fps=fps,
     )
+    recomputed = recompute_reachability_metrics(
+        desired_motion,
+        projected_motion,
+        sequence,
+        robot,
+    )
+    validate_reachability_report(
+        reachability,
+        recomputed,
+        desired_motion,
+        projected_motion,
+    )
+    summary = recomputed["summary"]
 
     motion_scale = _finite_number(parameters.get("motion_scale"), "motion scale")
     declared_contraction = _finite_number(
@@ -183,7 +198,7 @@ def _candidate_record(candidate_root: Path) -> dict:
         raise ValueError(
             "reachability extension_only disagrees with robot contraction"
         )
-    geometry = compute_rod_constraint_metrics(sequence, robot)
+    geometry = recomputed["geometry"]
     rig_variant = parameters.get("rig_variant")
     morphology = parameters.get("morphology_variant")
     if not isinstance(rig_variant, str) or not isinstance(morphology, str):
@@ -223,6 +238,10 @@ def _candidate_record(candidate_root: Path) -> dict:
         "rig_variant": rig_variant,
         "morphology_variant": morphology,
         "summary": summary,
+        "recomputed_reachability": {
+            "thresholds": recomputed["thresholds"],
+            "summary": summary,
+        },
         "recomputed_geometry": geometry,
         "eligible": not failures,
         "eligibility_failures": failures,

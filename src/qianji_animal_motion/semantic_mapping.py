@@ -186,6 +186,7 @@ def resolve_leg_identities(
     anchor_state: int = 0,
     switch_penalty: float = 0.0025,
     ambiguity_margin: float = 0.15,
+    recovery_switch_penalty: float = 0.1,
 ) -> IdentityResolution:
     """Resolve keep/swap states in both directions from a confirmed anchor."""
     frame_count = len(left)
@@ -236,8 +237,17 @@ def resolve_leg_identities(
             if margin < ambiguity_margin:
                 states[frame] = last_reliable_state
                 ambiguous[frame] = True
-                last_reliable_frame = frame
                 continue
+            if (
+                abs(frame - last_reliable_frame) > 1
+                and chosen != last_reliable_state
+                and (
+                    alternatives[last_reliable_state]
+                    - alternatives[chosen]
+                )
+                < recovery_switch_penalty
+            ):
+                chosen = last_reliable_state
 
             states[frame] = chosen
             last_reliable_frame = frame

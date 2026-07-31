@@ -3,21 +3,33 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import cv2
 import numpy as np
+import pandas as pd
 import pytest
 
-from qianji_animal_motion.keypoints_39 import SUPERANIMAL_QUADRUPED_39
+from qianji_animal_motion.keypoints_39 import (
+    SUPERANIMAL_QUADRUPED_39,
+    build_39point_observation,
+)
 from qianji_animal_motion.lift_39 import (
     build_neutral_landmarks_39,
     lift_39point_trajectory,
 )
 from qianji_animal_motion.lift_3d import KEYPOINT_ROLES
+from qianji_animal_motion.semantic_mapping import VideoInfo
 from qianji_animal_motion.vgt_control import (
     build_target_control_motion,
     build_vgt_control_map,
+)
+from qianji_animal_motion.vgt_sequence import (
+    REACHABILITY_THRESHOLDS,
+    load_and_validate_vgt_sequence,
+    recompute_reachability_metrics,
+    validate_control_motion,
 )
 
 
@@ -249,7 +261,7 @@ def _write_candidate_fixture(
     times = np.arange(2, dtype=float) / 30.0
     positions = np.repeat(neutral[None, :, :], 2, axis=0)
     if tamper_position:
-        positions[1, 0, 0] += 0.01
+        positions[1, 0] = positions[1, 1]
     npz_path = root / "site_targets.npz"
     np.savez_compressed(
         npz_path,
@@ -298,31 +310,56 @@ def _write_candidate_fixture(
     _write_json(paths["desired_motion"], desired)
     _write_json(paths["projected_motion"], projected)
 
-    max_edge = 0.01 if tamper_position else 0.0
-    summary = {
-        "frames": 2,
-        "status_counts": {
-            "feasible": 2,
-            "marginal": 0,
-            "unreachable": 0,
-        },
-        "feasible_fraction": 1.0,
-        "marginal_or_feasible_fraction": 1.0,
-        "max_keypoint_error_m": 0.01,
-        "mean_keypoint_error_m": 0.005,
-        "max_edge_violation_m": max_edge,
-        "max_estimated_clipped_fraction": clip_fraction,
-        "mean_estimated_clipped_fraction": clip_fraction / 2.0,
-    }
+    sequence = load_and_validate_vgt_sequence(
+        npz_path,
+        robot,
+        expected_frames=2,
+        expected_sites=12,
+        expected_rods=30,
+    )
+    desired_motion = validate_control_motion(
+        desired,
+        expected_frames=2,
+        expected_fps=30.0,
+    )
+    projected_motion = validate_control_motion(
+        projected,
+        expected_frames=2,
+        expected_fps=30.0,
+    )
+    independent = recompute_reachability_metrics(
+        desired_motion,
+        projected_motion,
+        sequence,
+        robot,
+    )
+    summary = json.loads(json.dumps(independent["summary"]))
+    report_frames = []
+    for frame_idx, frame in enumerate(independent["frames"]):
+        report_frames.append(
+            {
+                **frame,
+                "target_keypoints": desired["frames"][frame_idx]["keypoints"],
+                "projected_keypoints": projected["frames"][frame_idx][
+                    "keypoints"
+                ],
+            }
+        )
+    if clip_fraction:
+        summary["max_estimated_clipped_fraction"] = clip_fraction
+        summary["mean_estimated_clipped_fraction"] = clip_fraction / 2.0
+        report_frames[0]["estimated_clipped_fraction"] = clip_fraction
     run_summary = root / "run_summary.json"
     reachability = root / "reachability_report.json"
     _write_json(run_summary, {"summary": summary})
     _write_json(
         reachability,
         {
+            "schema": "qianji-keypoint-reachability-report-v1",
             "extension_only": actual_contraction == 0.0,
+            "thresholds": REACHABILITY_THRESHOLDS,
             "summary": summary,
-            "frames": [],
+            "frames": report_frames,
         },
     )
     _write_json(
@@ -359,19 +396,16 @@ def test_candidate_gates_reject_edge_violation_and_clipping(
             tamper_position=True,
         )
     )
-    clipped = candidate_record(
-        _write_candidate_fixture(
-            tmp_path / "clip",
-            clip_fraction=0.051,
+    with pytest.raises(ValueError, match="independently recomputed"):
+        candidate_record(
+            _write_candidate_fixture(
+                tmp_path / "clip",
+                clip_fraction=0.051,
+            )
         )
-    )
 
     assert edge["eligible"] is False
     assert "max_edge_violation_above_0.0005_m" in edge[
-        "eligibility_failures"
-    ]
-    assert clipped["eligible"] is False
-    assert "max_estimated_clipped_fraction_above_0.05" in clipped[
         "eligibility_failures"
     ]
 
@@ -386,6 +420,40 @@ def test_candidate_rejects_declared_contraction_that_robot_does_not_have(
     )
 
     with pytest.raises(ValueError, match="declared contraction"):
+        candidate_record(root)
+
+
+def test_candidate_rejects_report_from_different_control_motion(
+    tmp_path: Path,
+) -> None:
+    root = _write_candidate_fixture(tmp_path / "mismatched-control")
+    desired_path = root / "desired.json"
+    desired = json.loads(desired_path.read_text(encoding="utf-8"))
+    desired["frames"][0]["keypoints"]["spine_front"][0] += 0.06
+    _write_json(desired_path, desired)
+
+    with pytest.raises(ValueError, match="status counts differ"):
+        candidate_record(root)
+
+
+def test_candidate_rejects_forged_status_counts_and_fraction(
+    tmp_path: Path,
+) -> None:
+    root = _write_candidate_fixture(tmp_path / "forged-status")
+    report_path = root / "reachability_report.json"
+    run_summary_path = root / "run_summary.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["frames"][0]["status"] = "marginal"
+    report["summary"]["status_counts"] = {
+        "feasible": 1,
+        "marginal": 1,
+        "unreachable": 0,
+    }
+    report["summary"]["feasible_fraction"] = 0.5
+    _write_json(report_path, report)
+    _write_json(run_summary_path, {"summary": report["summary"]})
+
+    with pytest.raises(ValueError, match="status counts differ"):
         candidate_record(root)
 
 
@@ -424,7 +492,29 @@ def _build_complete_case(root: Path) -> None:
     mesh_path = root / "sources" / "mesh.glb"
     corrected_path = root / "sources" / "corrected.json"
     _write_video(video_path)
-    predictions_path.write_bytes(b"39-point-h5")
+    columns = pd.MultiIndex.from_product(
+        [
+            ["fixture"],
+            ["animal0"],
+            SUPERANIMAL_QUADRUPED_39,
+            ["x", "y", "likelihood"],
+        ],
+        names=["scorer", "individuals", "bodyparts", "coords"],
+    )
+    prediction_rows = np.empty((272, len(columns)), dtype=float)
+    for role_idx, _role in enumerate(SUPERANIMAL_QUADRUPED_39):
+        prediction_rows[:, role_idx * 3 : role_idx * 3 + 3] = (
+            float(4 + role_idx % 24),
+            float(3 + role_idx % 15),
+            0.9,
+        )
+    back_base_index = SUPERANIMAL_QUADRUPED_39.index("back_base")
+    prediction_rows[0, back_base_index * 3] += 0.1
+    pd.DataFrame(prediction_rows, columns=columns).to_hdf(
+        predictions_path,
+        key="predictions",
+        mode="w",
+    )
     mesh_path.write_bytes(b"glb")
     video_sha = _sha(video_path)
     predictions_sha = _sha(predictions_path)
@@ -530,91 +620,30 @@ def _build_complete_case(root: Path) -> None:
         },
     )
 
-    observation = {
-        "schema": "qianji.keypoint_trajectory_2d_39",
-        "schema_version": "0.1.0",
-        "coordinate_system": (
-            "image_pixels_top_left_origin_x_right_y_down"
-        ),
-        "roles": list(SUPERANIMAL_QUADRUPED_39),
-        "video": video,
-        "identity_anchor": {
-            "frame_idx": 152,
-            "front_assignment": "keep",
-            "rear_assignment": "keep",
-        },
-        "source_lineage": {
-            "video_sha256": video_sha,
-            "predictions_sha256": predictions_sha,
-            "corrected_trajectory_sha256": corrected_sha,
-        },
-        "quality_policy": {
-            "confidence_threshold": 0.3,
-            "temporal_jump_torso_fraction": 0.75,
-            "interpolation": "none",
-            "smoothing": "none",
-        },
-        "frames": [
-            {
-                "frame_idx": frame_idx,
-                "timestamp_s": frame_idx / 30.0,
-                "keypoints": {
-                    role: {
-                        "raw_x_px": float(4 + index % 24),
-                        "raw_y_px": float(3 + index % 15),
-                        "x_px": float(4 + index % 24),
-                        "y_px": float(3 + index % 15),
-                        "confidence": 0.9,
-                        "valid": True,
-                        "identity_corrected": False,
-                        "flags": [],
-                    }
-                    for index, role in enumerate(SUPERANIMAL_QUADRUPED_39)
-                },
-            }
-            for frame_idx in range(272)
-        ],
+    observation_result = build_39point_observation(
+        pd.read_hdf(predictions_path),
+        VideoInfo(width=32, height=24, fps=30.0, frame_count=272),
+        individual="animal0",
+        confidence_threshold=0.3,
+        anchor_frame=152,
+        front_anchor="keep",
+        rear_anchor="keep",
+    )
+    observation = observation_result.trajectory
+    source_lineage = {
+        "video_sha256": video_sha,
+        "predictions_sha256": predictions_sha,
+        "corrected_trajectory_sha256": corrected_sha,
     }
+    observation["source_lineage"] = source_lineage
+    observation_result.report["source_lineage"] = dict(source_lineage)
     _write_json(
         root / "observation" / "keypoint_trajectory_2d_39.json",
         observation,
     )
     _write_json(
         root / "observation" / "keypoint_39_quality_report.json",
-        {
-            "schema": "qianji.keypoint_39_quality_report",
-            "schema_version": "0.1.0",
-            "scorer": "fixture",
-            "individual": "animal0",
-            "frame_count": 272,
-            "role_count": 39,
-            "confidence_threshold": 0.3,
-            "identity_anchor": dict(observation["identity_anchor"]),
-            "source_lineage": dict(observation["source_lineage"]),
-            "torso_scale_fallback_frames": [],
-            "identity": {
-                "front": {
-                    "anchor_assignment": "keep",
-                    "swapped_frames": [],
-                    "ambiguous_frames": [],
-                },
-                "rear": {
-                    "anchor_assignment": "keep",
-                    "swapped_frames": [],
-                    "ambiguous_frames": [],
-                },
-            },
-            "roles": {
-                role: {
-                    "valid_frames": 272,
-                    "invalid_frames": [],
-                    "flag_counts": {},
-                }
-                for role in SUPERANIMAL_QUADRUPED_39
-            },
-            "interpolation_applied": False,
-            "smoothing_applied": False,
-        },
+        observation_result.report,
     )
     _write_video(root / "observation" / "keypoint_39_preview.mp4")
 
@@ -689,10 +718,29 @@ def _build_complete_case(root: Path) -> None:
     joint_xml = "".join(
         (
             f'<joint name="{rod["name"]}__slide_{side}" '
+            f'type="slide" axis="0 0 {"-1" if side == "left" else "1"}" '
             'range="0.0 0.5"/>'
         )
         for rod in robot["rod_groups"]
         for side in ("left", "right")
+    )
+    endpoint_site_xml = "".join(
+        (
+            f'<site name="{rod["name"]}__s1_site"/>'
+            f'<site name="{rod["name"]}__s2_site"/>'
+            f'<site name="anchor_{rod["site1"]}_port_{rod["name"]}_left_site"/>'
+            f'<site name="anchor_{rod["site2"]}_port_{rod["name"]}_right_site"/>'
+        )
+        for rod in robot["rod_groups"]
+    )
+    weld_xml = "".join(
+        (
+            f'<weld site1="{rod["name"]}__s1_site" '
+            f'site2="anchor_{rod["site1"]}_port_{rod["name"]}_left_site"/>'
+            f'<weld site1="{rod["name"]}__s2_site" '
+            f'site2="anchor_{rod["site2"]}_port_{rod["name"]}_right_site"/>'
+        )
+        for rod in robot["rod_groups"]
     )
     actuator_xml = "".join(
         (
@@ -705,7 +753,8 @@ def _build_complete_case(root: Path) -> None:
     (root / "initial_model" / "robot.xml").write_text(
         (
             '<mujoco model="selected"><worldbody>'
-            f"{anchor_xml}{joint_xml}</worldbody>"
+            f"{anchor_xml}{joint_xml}{endpoint_site_xml}</worldbody>"
+            f"<equality>{weld_xml}</equality>"
             f"<actuator>{actuator_xml}</actuator></mujoco>\n"
         ),
         encoding="utf-8",
@@ -713,7 +762,8 @@ def _build_complete_case(root: Path) -> None:
     (root / "initial_model" / "robot_scene.xml").write_text(
         (
             '<mujoco model="selected"><worldbody>'
-            f"{anchor_xml}{joint_xml}</worldbody>"
+            f"{anchor_xml}{joint_xml}{endpoint_site_xml}</worldbody>"
+            f"<equality>{weld_xml}</equality>"
             f"<actuator>{actuator_xml}</actuator></mujoco>\n"
         ),
         encoding="utf-8",
@@ -770,7 +820,9 @@ def _build_complete_case(root: Path) -> None:
         control_map,
     )
     projected_payload = json.loads(json.dumps(desired_payload))
-    desired_payload["frames"][0]["keypoints"]["spine_front"][0] += 0.001
+    projected_payload["frames"][0]["keypoints"]["spine_front"][:3] = (
+        robot["sites"][rig["key_site_map"]["spine_front"]]["pos"]
+    )
     desired = root / "control" / "target_control_keypoint_motion.json"
     projected = root / "control" / "projected_control_keypoint_motion.json"
     _write_json(desired, desired_payload)
@@ -792,38 +844,43 @@ def _build_complete_case(root: Path) -> None:
     cv2.imwrite(str(root / "previews" / "vgt_isometric.png"), image)
 
     selected_root = root / "candidates" / "selected"
-    summary = {
-        "frames": 272,
-        "status_counts": {
-            "feasible": 272,
-            "marginal": 0,
-            "unreachable": 0,
-        },
-        "feasible_fraction": 1.0,
-        "marginal_or_feasible_fraction": 1.0,
-        "max_keypoint_error_m": 0.001,
-        "mean_keypoint_error_m": 0.0005,
-        "max_edge_violation_m": 0.0,
-        "max_estimated_clipped_fraction": 0.0,
-        "mean_estimated_clipped_fraction": 0.0,
-    }
+    sequence = load_and_validate_vgt_sequence(
+        npz_path,
+        robot,
+        expected_frames=272,
+        expected_sites=12,
+        expected_rods=30,
+    )
+    desired_motion = validate_control_motion(
+        desired_payload,
+        expected_frames=272,
+        expected_fps=30.0,
+    )
+    projected_motion = validate_control_motion(
+        projected_payload,
+        expected_frames=272,
+        expected_fps=30.0,
+    )
+    independent = recompute_reachability_metrics(
+        desired_motion,
+        projected_motion,
+        sequence,
+        robot,
+    )
+    summary = independent["summary"]
     run_summary = selected_root / "run_summary.json"
     qianji_report = selected_root / "reachability_report.json"
     _write_json(run_summary, {"summary": summary})
     _write_json(
         qianji_report,
         {
+            "schema": "qianji-keypoint-reachability-report-v1",
             "extension_only": True,
+            "thresholds": REACHABILITY_THRESHOLDS,
             "summary": summary,
             "frames": [
                 {
-                    "frame": index,
-                    "time": index / 30.0,
-                    "status": "feasible",
-                    "max_keypoint_error_m": 0.001,
-                    "mean_keypoint_error_m": 0.0005,
-                    "max_edge_violation_m": 0.0,
-                    "estimated_clipped_fraction": 0.0,
+                    **independent["frames"][index],
                     "target_keypoints": desired_payload["frames"][index][
                         "keypoints"
                     ],
@@ -834,13 +891,6 @@ def _build_complete_case(root: Path) -> None:
                 for index in range(272)
             ],
         },
-    )
-    sequence = verify_module.load_and_validate_vgt_sequence(
-        npz_path,
-        robot,
-        expected_frames=272,
-        expected_sites=12,
-        expected_rods=30,
     )
     geometry = verify_module.compute_rod_constraint_metrics(sequence, robot)
 
@@ -860,6 +910,10 @@ def _build_complete_case(root: Path) -> None:
         "rig_variant": "bbox",
         "morphology_variant": "base",
         "summary": summary,
+        "recomputed_reachability": {
+            "thresholds": REACHABILITY_THRESHOLDS,
+            "summary": summary,
+        },
         "recomputed_geometry": geometry,
         "eligible": True,
         "eligibility_failures": [],
@@ -992,8 +1046,29 @@ def _build_complete_case(root: Path) -> None:
                 }
                 for index in range(10)
             ],
+            "inputs": [
+                {"path": str(path), "sha256": _sha(path)}
+                for path in (
+                    video_path,
+                    predictions_path,
+                    mesh_path,
+                    corrected_path,
+                    ROOT
+                    / "experiments/39point_vgt_cat/fixtures/"
+                    "cat_hunyuan_qianji_robot_12x30.json",
+                    ROOT
+                    / "experiments/39point_vgt_cat/fixtures/"
+                    "cat_hunyuan_qianji_robot_12x30.manifest.json",
+                )
+            ],
             "invocation": {
-                "argv": ["run_experiment.sh"],
+                "argv": [
+                    "bash",
+                    str(
+                        ROOT
+                        / "experiments/39point_vgt_cat/run_experiment.sh"
+                    ),
+                ],
                 "working_directory": str(ROOT),
             },
             "environment": {
@@ -1251,6 +1326,119 @@ def test_verifier_rejects_base_robot_that_is_not_linked_to_the_input_mesh(
     assert report["checks"]["initial_vgt_lineage"]["passed"] is False
 
 
+def test_verifier_replays_h5_instead_of_trusting_observation_lineage(
+    tmp_path: Path,
+) -> None:
+    case = tmp_path / "h5-replay"
+    _build_complete_case(case)
+    predictions_path = case / "sources" / "predictions.h5"
+    dataframe = pd.read_hdf(predictions_path)
+    x_column = (
+        "fixture",
+        "animal0",
+        "nose",
+        "x",
+    )
+    dataframe.loc[0, x_column] += 1.0
+    dataframe.to_hdf(predictions_path, key="predictions", mode="w")
+    predictions_sha = _sha(predictions_path)
+
+    corrected_path = case / "sources" / "corrected.json"
+    corrected = json.loads(corrected_path.read_text())
+    corrected["source"]["predictions_sha256"] = predictions_sha
+    corrected["identity_anchor"]["predictions_sha256"] = predictions_sha
+    _write_json(corrected_path, corrected)
+    corrected_sha = _sha(corrected_path)
+
+    manifest_path = case / "input_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["sources"]["predictions"]["sha256"] = predictions_sha
+    manifest["sources"]["corrected_spine"]["sha256"] = corrected_sha
+    _write_json(manifest_path, manifest)
+
+    lineage = {
+        "video_sha256": manifest["sources"]["video"]["sha256"],
+        "predictions_sha256": predictions_sha,
+        "corrected_trajectory_sha256": corrected_sha,
+    }
+    trajectory_path = (
+        case / "observation" / "keypoint_trajectory_2d_39.json"
+    )
+    trajectory = json.loads(trajectory_path.read_text())
+    trajectory["source_lineage"] = lineage
+    _write_json(trajectory_path, trajectory)
+    quality_path = case / "observation" / "keypoint_39_quality_report.json"
+    quality = json.loads(quality_path.read_text())
+    quality["source_lineage"] = lineage
+    _write_json(quality_path, quality)
+
+    lift_sources = {
+        "trajectory_39": {
+            "path": "observation/keypoint_trajectory_2d_39.json",
+            "sha256": _sha(trajectory_path),
+        },
+        "corrected_spine": {
+            "path": str(corrected_path),
+            "sha256": corrected_sha,
+        },
+    }
+    neutral_path = case / "landmarks" / "neutral_landmarks_39.json"
+    neutral = json.loads(neutral_path.read_text())
+    neutral["sources"].update(lift_sources)
+    _write_json(neutral_path, neutral)
+    lift_report_path = case / "landmarks" / "lift_39_report.json"
+    lift_report = json.loads(lift_report_path.read_text())
+    lift_report["sources"].update(lift_sources)
+    _write_json(lift_report_path, lift_report)
+
+    report = verify_case(case)
+
+    assert report["passed"] is False
+    assert report["checks"]["observation_39_roles"]["passed"] is False
+    assert "independent replay" in report["checks"][
+        "observation_39_roles"
+    ]["error"]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "check_name"),
+    [
+        ("valid_3d_xyz", "body_relative_3d_39"),
+        ("lateral_3d_xyz", "body_relative_3d_39"),
+        ("neutral_primary_xyz", "observation_control_split"),
+        ("desired_control_xyz", "observation_control_split"),
+    ],
+)
+def test_verifier_replays_each_upstream_transform(
+    tmp_path: Path,
+    mutation: str,
+    check_name: str,
+) -> None:
+    case = tmp_path / mutation
+    _build_complete_case(case)
+    if mutation in {"valid_3d_xyz", "lateral_3d_xyz"}:
+        path = case / "landmarks" / "keypoint_motion_3d_39.json"
+        payload = json.loads(path.read_text())
+        payload["frames"][0]["keypoints"]["nose"][
+            0 if mutation == "valid_3d_xyz" else 1
+        ] += 0.01
+    elif mutation == "neutral_primary_xyz":
+        path = case / "control" / "vgt_control_map.json"
+        payload = json.loads(path.read_text())
+        payload["controls"]["spine_front"]["neutral_primary_xyz"][0] += 0.01
+    else:
+        path = case / "control" / "target_control_keypoint_motion.json"
+        payload = json.loads(path.read_text())
+        payload["frames"][0]["keypoints"]["spine_front"][0] += 0.01
+    _write_json(path, payload)
+
+    report = verify_case(case)
+
+    assert report["passed"] is False
+    assert report["checks"][check_name]["passed"] is False
+    assert "independent replay" in report["checks"][check_name]["error"]
+
+
 def test_verifier_rejects_xml_generated_from_a_different_robot(
     tmp_path: Path,
 ) -> None:
@@ -1278,6 +1466,52 @@ def test_verifier_rejects_xml_generated_from_a_different_robot(
     assert "XML anchors differ" in report["checks"][
         "robot_12_sites_30_rods"
     ]["error"]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("slide_axis", "axis differs"),
+        ("weld_endpoint", "weld endpoints differ"),
+        ("actuator_joint", "targets the wrong joint"),
+    ],
+)
+def test_verifier_checks_xml_rod_topology(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    case = tmp_path / mutation
+    _build_complete_case(case)
+    xml_path = case / "initial_model" / "robot.xml"
+    tree = ET.parse(xml_path)
+    xml_root = tree.getroot()
+    if mutation == "slide_axis":
+        next(
+            joint
+            for joint in xml_root.iter("joint")
+            if joint.get("name", "").endswith("__slide_left")
+        ).set("axis", "0 0 1")
+    elif mutation == "weld_endpoint":
+        welds = list(xml_root.iter("weld"))
+        welds[0].set("site2", str(welds[1].get("site2")))
+    else:
+        actuators = list(xml_root.iter("position"))
+        actuators[0].set("joint", str(actuators[1].get("joint")))
+    tree.write(xml_path, encoding="unicode")
+    conversion_path = (
+        case / "initial_model" / "robot_conversion_manifest.json"
+    )
+    conversion = json.loads(conversion_path.read_text())
+    conversion["artifacts"]["robot_xml"]["sha256"] = _sha(xml_path)
+    _write_json(conversion_path, conversion)
+
+    report = verify_case(case)
+
+    assert report["passed"] is False
+    check = report["checks"]["robot_12_sites_30_rods"]
+    assert check["passed"] is False
+    assert message in check["error"]
 
 
 @pytest.mark.parametrize(

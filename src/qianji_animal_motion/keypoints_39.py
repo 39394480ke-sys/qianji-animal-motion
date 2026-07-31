@@ -489,11 +489,34 @@ def _resolved_arrays(
 def _torso_scales(
     arrays: dict[str, np.ndarray],
     video: VideoInfo,
+    confidence_threshold: float,
 ) -> tuple[np.ndarray, list[int]]:
-    difference = arrays["back_base"][:, :2] - arrays["back_end"][:, :2]
+    base = arrays["back_base"]
+    end = arrays["back_end"]
+    difference = base[:, :2] - end[:, :2]
     scales = np.linalg.norm(difference, axis=1)
-    fallback = ~np.isfinite(scales) | (scales <= 1e-6)
-    scales[fallback] = math.hypot(video.width, video.height)
+    reliable = (
+        np.isfinite(base).all(axis=1)
+        & np.isfinite(end).all(axis=1)
+        & (base[:, 2] >= confidence_threshold)
+        & (end[:, 2] >= confidence_threshold)
+        & (base[:, 0] >= 0.0)
+        & (base[:, 0] < video.width)
+        & (base[:, 1] >= 0.0)
+        & (base[:, 1] < video.height)
+        & (end[:, 0] >= 0.0)
+        & (end[:, 0] < video.width)
+        & (end[:, 1] >= 0.0)
+        & (end[:, 1] < video.height)
+        & (scales > 1e-6)
+    )
+    fallback = ~reliable
+    fallback_scale = (
+        float(np.median(scales[reliable]))
+        if reliable.any()
+        else math.hypot(video.width, video.height)
+    )
+    scales[fallback] = fallback_scale
     return scales, np.flatnonzero(fallback).astype(int).tolist()
 
 
@@ -519,7 +542,11 @@ def build_39point_observation(
         role: _bodypart_array(dataframe, scorer, individual, role)
         for role in SUPERANIMAL_QUADRUPED_39
     }
-    torso_scales, torso_fallback_frames = _torso_scales(arrays, video)
+    torso_scales, torso_fallback_frames = _torso_scales(
+        arrays,
+        video,
+        confidence_threshold,
+    )
     resolved, identity_report = _resolved_arrays(
         arrays,
         anchor_frame=anchor_frame,
@@ -552,6 +579,7 @@ def build_39point_observation(
             else None
         )
         values = resolved[role]
+        last_reliable_frame: int | None = None
         for frame_idx, (x, y, confidence) in enumerate(values):
             flags = []
             finite_xy = bool(np.isfinite([x, y]).all())
@@ -565,23 +593,29 @@ def build_39point_observation(
                 or not 0.0 <= y < video.height
             ):
                 flags.append("out_of_bounds")
-            if frame_idx > 0 and finite_xy and np.isfinite(
-                values[frame_idx - 1, :2]
-            ).all():
-                step = float(
-                    np.linalg.norm(
-                        values[frame_idx, :2]
-                        - values[frame_idx - 1, :2]
-                    )
-                )
-                if step > 0.75 * torso_scales[frame_idx]:
-                    flags.append("temporal_jump")
             if (
                 prefix is not None
                 and frame_idx in ambiguous_frames[prefix]
             ):
                 flags.append("identity_ambiguous")
+            if not flags and last_reliable_frame is not None:
+                gap = frame_idx - last_reliable_frame
+                step = float(
+                    np.linalg.norm(
+                        values[frame_idx, :2]
+                        - values[last_reliable_frame, :2]
+                    )
+                )
+                threshold = (
+                    0.75
+                    * torso_scales[frame_idx]
+                    * math.sqrt(float(gap))
+                )
+                if step > threshold:
+                    flags.append("temporal_jump")
             valid = not flags
+            if valid:
+                last_reliable_frame = frame_idx
             if not valid:
                 invalid_frames.append(frame_idx)
                 flags_counter.update(flags)

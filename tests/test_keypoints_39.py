@@ -145,6 +145,63 @@ def test_quality_policy_keeps_bad_observations_explicit() -> None:
     }
 
 
+def test_temporal_jump_uses_previous_reliable_observation() -> None:
+    values = _values(3)
+    values["nose"][1] = [99.0, 20.0, 0.1]
+
+    result = build_39point_observation(
+        _dataframe(values),
+        _video(3),
+        confidence_threshold=0.3,
+        anchor_frame=0,
+    )
+
+    nose = [
+        frame["keypoints"]["nose"]
+        for frame in result.trajectory["frames"]
+    ]
+    assert nose[1]["flags"] == ["low_confidence"]
+    assert nose[2]["valid"] is True
+    assert nose[2]["flags"] == []
+
+
+def test_temporal_jump_is_checked_across_a_non_finite_gap() -> None:
+    values = _values(3)
+    values["nose"][1, 0] = np.nan
+    values["nose"][2, 0] = 90.0
+
+    result = build_39point_observation(
+        _dataframe(values),
+        _video(3),
+        anchor_frame=0,
+    )
+
+    nose = [
+        frame["keypoints"]["nose"]
+        for frame in result.trajectory["frames"]
+    ]
+    assert "non_finite" in nose[1]["flags"]
+    assert nose[2]["flags"] == ["temporal_jump"]
+
+
+def test_low_confidence_torso_cannot_inflate_temporal_jump_threshold() -> None:
+    values = _values(3)
+    values["back_end"][1] = [0.0, 30.0, 0.1]
+    values["back_base"][1] = [99.0, 30.0, 0.1]
+    values["lower_jaw"][1, 0] = 70.0
+
+    result = build_39point_observation(
+        _dataframe(values),
+        _video(3),
+        confidence_threshold=0.3,
+        anchor_frame=0,
+    )
+
+    point = result.trajectory["frames"][1]["keypoints"]["lower_jaw"]
+    assert point["flags"] == ["temporal_jump"]
+    assert result.report["torso_scale_fallback_frames"] == [1]
+
+
 def test_identity_swap_applies_to_complete_front_and_rear_chains() -> None:
     values = _values(2)
     for prefix in ("front", "back"):

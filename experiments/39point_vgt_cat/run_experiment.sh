@@ -83,6 +83,47 @@ mkdir -p \
   "$OUTPUT_ROOT/previews" \
   "$OUTPUT_ROOT/reports"
 
+START_PROVENANCE="$OUTPUT_ROOT/.start_provenance.json"
+PROVENANCE_ARGS=(
+  --repository-root "$REPO_ROOT"
+  --qianji-root "$QIANJI_ROOT"
+  --script "${REPO_ROOT}/experiments/39point_vgt_cat/run_experiment.sh"
+  --script "${REPO_ROOT}/experiments/39point_vgt_cat/compare_candidates.py"
+  --script "${REPO_ROOT}/experiments/39point_vgt_cat/verify_case.py"
+  --script "${REPO_ROOT}/experiments/39point_vgt_cat/record_robot_conversion.py"
+  --script "${REPO_ROOT}/src/qianji_animal_motion/keypoints_39.py"
+  --script "${REPO_ROOT}/src/qianji_animal_motion/lift_39.py"
+  --script "${REPO_ROOT}/src/qianji_animal_motion/vgt_control.py"
+  --script "${REPO_ROOT}/src/qianji_animal_motion/vgt_sequence.py"
+  --script "$GENERATOR"
+  --script "$REACHABILITY"
+  --script "$MORPHOLOGY"
+  --script "$QIANJI_REACHABILITY_CORE"
+  --script "$QIANJI_SLIDE_ADAPTER"
+  --script "$QIANJI_XML_CONVERTER"
+  --script "$QIANJI_SCENE_BUILDER"
+  --input "$VIDEO"
+  --input "$PREDICTIONS"
+  --input "$MESH"
+  --input "$CORRECTED"
+  --input "$FROZEN_ROBOT"
+  --input "$FROZEN_ROBOT_MANIFEST"
+  --invocation-arg bash
+  --invocation-arg "${REPO_ROOT}/experiments/39point_vgt_cat/run_experiment.sh"
+  --invocation-arg "ANIMAL_DATA_ROOT=${ANIMAL_DATA_ROOT}"
+  --invocation-arg "QIANJI_ROOT=${QIANJI_ROOT}"
+  --invocation-arg "OUTPUT_ROOT=${FINAL_OUTPUT_ROOT}"
+  --working-directory "$REPO_ROOT"
+)
+PROVENANCE_CLEAN_FLAG="--require-clean"
+if [[ "${ALLOW_DIRTY_EXPERIMENT:-0}" == "1" ]]; then
+  PROVENANCE_CLEAN_FLAG=""
+fi
+"$PYTHON" -m qianji_animal_motion.experiment_provenance \
+  "${PROVENANCE_ARGS[@]}" \
+  ${PROVENANCE_CLEAN_FLAG:+"$PROVENANCE_CLEAN_FLAG"} \
+  --output "$START_PROVENANCE"
+
 "$PYTHON" -m qianji_animal_motion.keypoints_39_cli \
   --video "$VIDEO" \
   --predictions "$PREDICTIONS" \
@@ -340,23 +381,12 @@ cp "$OUTPUT_ROOT/motion/vgt_three_view.png" "$OUTPUT_ROOT/previews/"
 cp "$OUTPUT_ROOT/motion/vgt_isometric.png" "$OUTPUT_ROOT/previews/"
 cp "$OUTPUT_ROOT/motion/vgt_motion_30fps.mp4" "$OUTPUT_ROOT/previews/"
 
-mamba run -n biomimic python \
-  "${REPO_ROOT}/src/qianji_animal_motion/experiment_provenance.py" \
-  --repository-root "$REPO_ROOT" \
-  --qianji-root "$QIANJI_ROOT" \
-  --script "${REPO_ROOT}/experiments/39point_vgt_cat/run_experiment.sh" \
-  --script "${REPO_ROOT}/experiments/39point_vgt_cat/compare_candidates.py" \
-  --script "${REPO_ROOT}/experiments/39point_vgt_cat/verify_case.py" \
-  --script "${REPO_ROOT}/experiments/39point_vgt_cat/record_robot_conversion.py" \
-  --script "${REPO_ROOT}/src/qianji_animal_motion/frozen_initial_robot.py" \
-  --script "$GENERATOR" \
-  --script "$REACHABILITY" \
-  --script "$MORPHOLOGY" \
-  --script "$QIANJI_REACHABILITY_CORE" \
-  --script "$QIANJI_SLIDE_ADAPTER" \
-  --script "$QIANJI_XML_CONVERTER" \
-  --script "$QIANJI_SCENE_BUILDER" \
+"$PYTHON" -m qianji_animal_motion.experiment_provenance \
+  "${PROVENANCE_ARGS[@]}" \
+  ${PROVENANCE_CLEAN_FLAG:+"$PROVENANCE_CLEAN_FLAG"} \
+  --verify-against "$START_PROVENANCE" \
   --output "$OUTPUT_ROOT/reports/experiment_provenance.json"
+rm "$START_PROVENANCE"
 
 "$PYTHON" "$REPO_ROOT/experiments/39point_vgt_cat/verify_case.py" "$OUTPUT_ROOT"
 if [[ -e "$FINAL_OUTPUT_ROOT" ]]; then

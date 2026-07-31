@@ -12,6 +12,7 @@ import numpy as np
 from qianji_animal_motion.keypoints_39 import SUPERANIMAL_QUADRUPED_39
 from qianji_animal_motion.lift_3d import (
     IMAGE_COORDINATE_SYSTEM,
+    _spine_geometry,
     _validate_trajectory,
     neutral_pose_from_rig,
 )
@@ -28,29 +29,7 @@ class Lift39Result:
 
 
 def _spine_frame(frame: dict) -> tuple[np.ndarray, np.ndarray, float]:
-    try:
-        rear = frame["keypoints"]["spine_rear"]
-        front = frame["keypoints"]["spine_front"]
-    except (KeyError, TypeError) as error:
-        raise ValueError("corrected frame is missing spine roles") from error
-    if rear.get("valid") is not True or front.get("valid") is not True:
-        raise ValueError("corrected frame must contain a valid spine")
-    try:
-        rear_xy = np.asarray([rear["x_px"], rear["y_px"]], dtype=float)
-        front_xy = np.asarray([front["x_px"], front["y_px"]], dtype=float)
-    except (KeyError, TypeError, ValueError) as error:
-        raise ValueError("corrected spine coordinates are malformed") from error
-    if not np.isfinite(rear_xy).all() or not np.isfinite(front_xy).all():
-        raise ValueError("corrected spine coordinates must be finite")
-    difference = front_xy - rear_xy
-    torso = float(np.linalg.norm(difference))
-    if torso <= 1e-9:
-        raise ValueError("corrected spine torso length must be positive")
-    forward = difference / torso
-    up = np.asarray([forward[1], -forward[0]], dtype=float)
-    if up[1] > 0.0:
-        up = -up
-    return (rear_xy + front_xy) / 2.0, np.stack([forward, up]), torso
+    return _spine_geometry(frame)
 
 
 def _neutral_basis(
@@ -216,7 +195,7 @@ def _validate_inputs(
         if time_39 <= previous_time:
             raise ValueError("trajectory timestamps must be strictly increasing")
         previous_time = time_39
-        _spine_frame(spine_frame)
+    _spine_frame(spine_frames[reference_frame])
 
 
 def _side(role: str) -> str:
@@ -242,6 +221,7 @@ def _raw_xy(point: dict, role: str) -> np.ndarray:
 
 def _reference_frame_for_role(
     trajectory_39: dict,
+    corrected_spine: dict,
     role: str,
     reference_frame: int,
 ) -> int | None:
@@ -255,6 +235,10 @@ def _reference_frame_for_role(
         key=lambda frame_idx: (abs(frame_idx - reference_frame), frame_idx),
     )
     for frame_idx in candidates:
+        try:
+            _spine_frame(corrected_spine["frames"][frame_idx])
+        except (KeyError, TypeError, ValueError):
+            continue
         point = trajectory_39["frames"][frame_idx]["keypoints"][role]
         if point.get("valid") is not True:
             continue
@@ -370,6 +354,7 @@ def validate_lifted_39_motion(
     report: dict,
     *,
     observation: dict | None = None,
+    corrected_spine: dict | None = None,
     neutral_landmarks: dict | None = None,
     expected_frames: int | None = None,
 ) -> dict:
@@ -434,6 +419,10 @@ def validate_lifted_39_motion(
         ):
             raise ValueError("lifted motion observation frame count differs")
         if neutral_landmarks is not None:
+            if corrected_spine is None:
+                raise ValueError(
+                    "corrected spine is required to validate neutral references"
+                )
             reference_frame = neutral_landmarks["reference_frame"]
             if (
                 observation.get("identity_anchor", {}).get("frame_idx")
@@ -447,6 +436,7 @@ def validate_lifted_39_motion(
                 expected_reference = (
                     _reference_frame_for_role(
                         observation,
+                        corrected_spine,
                         role,
                         reference_frame,
                     )
@@ -513,7 +503,15 @@ def validate_lifted_39_motion(
                 else None
             )
             if landmark is not None:
-                if landmark["anatomy_applicable"] is not True:
+                invalid_spine = False
+                if corrected_spine is not None:
+                    try:
+                        _spine_frame(corrected_spine["frames"][frame_idx])
+                    except (KeyError, TypeError, ValueError):
+                        invalid_spine = True
+                if invalid_spine:
+                    reason = "invalid_spine_frame"
+                elif landmark["anatomy_applicable"] is not True:
                     reason = "inapplicable_anatomy"
                 elif landmark["available"] is not True:
                     reason = "reference_unavailable"
@@ -602,6 +600,7 @@ def build_neutral_landmarks_39(
         role_reference = (
             _reference_frame_for_role(
                 trajectory_39,
+                corrected_spine,
                 role,
                 reference_frame,
             )
@@ -720,14 +719,20 @@ def lift_39point_trajectory(
             strict=True,
         )
     ):
-        origin, basis, torso = _spine_frame(spine_frame)
+        try:
+            origin, basis, torso = _spine_frame(spine_frame)
+            valid_spine = True
+        except ValueError:
+            valid_spine = False
         output_points = {}
         for role in SUPERANIMAL_QUADRUPED_39:
             point = frame["keypoints"][role]
             landmark = neutral_landmarks["landmarks"][role]
             neutral = np.asarray(landmark["xyz"], dtype=float)
             reason: str | None = None
-            if not landmark["anatomy_applicable"]:
+            if not valid_spine:
+                reason = "invalid_spine_frame"
+            elif not landmark["anatomy_applicable"]:
                 reason = "inapplicable_anatomy"
             elif landmark.get("available") is not True:
                 reason = "reference_unavailable"
