@@ -339,7 +339,12 @@ def _write_candidate_fixture(
         report_frames.append(
             {
                 **frame,
-                "target_keypoints": desired["frames"][frame_idx]["keypoints"],
+                "target_keypoints": {
+                    role: [*value[:3], 1.0]
+                    for role, value in desired["frames"][frame_idx][
+                        "keypoints"
+                    ].items()
+                },
                 "projected_keypoints": projected["frames"][frame_idx][
                     "keypoints"
                 ],
@@ -881,9 +886,12 @@ def _build_complete_case(root: Path) -> None:
             "frames": [
                 {
                     **independent["frames"][index],
-                    "target_keypoints": desired_payload["frames"][index][
-                        "keypoints"
-                    ],
+                    "target_keypoints": {
+                        role: [*value[:3], 1.0]
+                        for role, value in desired_payload["frames"][index][
+                            "keypoints"
+                        ].items()
+                    },
                     "projected_keypoints": projected_payload["frames"][
                         index
                     ]["keypoints"],

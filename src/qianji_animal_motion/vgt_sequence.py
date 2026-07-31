@@ -465,12 +465,21 @@ def validate_reachability_report(
                         [motion.confidences[frame_idx, role_idx]],
                     )
                 )
+                compare_value = (
+                    value[:3] if label == "target_keypoints" else value
+                )
+                compare_expected = (
+                    expected_value[:3]
+                    if label == "target_keypoints"
+                    else expected_value
+                )
                 if (
                     value.shape != (4,)
                     or not np.isfinite(value).all()
+                    or not 0.0 <= value[3] <= 1.0
                     or not np.allclose(
-                        value,
-                        expected_value,
+                        compare_value,
+                        compare_expected,
                         rtol=0.0,
                         atol=1e-9,
                     )
