@@ -99,8 +99,10 @@ def build_provenance(
     repository_root: Path,
     qianji_root: Path,
     script_paths: Sequence[Path],
+    input_paths: Sequence[Path] = (),
     package_names: Sequence[str] = DEFAULT_PACKAGES,
     invocation: Sequence[str] | None = None,
+    working_directory: Path | None = None,
 ) -> dict:
     """Build a deterministic provenance payload for one experiment run."""
     scripts = []
@@ -109,6 +111,12 @@ def build_provenance(
         if not path.is_file():
             raise FileNotFoundError(f"provenance script does not exist: {path}")
         scripts.append({"path": str(path), "sha256": _sha256(path)})
+    inputs = []
+    for source in input_paths:
+        path = Path(source).resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"provenance input does not exist: {path}")
+        inputs.append({"path": str(path), "sha256": _sha256(path)})
 
     packages = {}
     for name in sorted(set(package_names)):
@@ -123,9 +131,16 @@ def build_provenance(
         "repository": _repository_state(Path(repository_root)),
         "qianji": _repository_state(Path(qianji_root)),
         "scripts": scripts,
+        "inputs": inputs,
         "invocation": {
             "argv": list(sys.argv if invocation is None else invocation),
-            "working_directory": os.getcwd(),
+            "working_directory": str(
+                Path(
+                    os.getcwd()
+                    if working_directory is None
+                    else working_directory
+                ).resolve()
+            ),
         },
         "environment": {
             "conda_default_env": os.environ.get("CONDA_DEFAULT_ENV"),
@@ -135,6 +150,34 @@ def build_provenance(
             "packages": packages,
         },
     }
+
+
+def verify_unchanged_experiment_state(
+    start: dict,
+    end: dict,
+    *,
+    require_clean: bool,
+) -> None:
+    """Reject a run whose repositories, tools, inputs, or Python environment changed."""
+    for label in ("repository", "qianji"):
+        before = start.get(label)
+        after = end.get(label)
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            raise ValueError(f"{label} provenance is missing")
+        if require_clean and (
+            before.get("dirty") is not False or after.get("dirty") is not False
+        ):
+            raise ValueError(f"{label} must remain clean for a formal experiment")
+        if before != after:
+            raise ValueError(f"{label} state changed during the experiment")
+    if start.get("scripts") != end.get("scripts"):
+        raise ValueError("tool scripts changed during the experiment")
+    if start.get("inputs") != end.get("inputs"):
+        raise ValueError("input files changed during the experiment")
+    if start.get("environment") != end.get("environment"):
+        raise ValueError("Python environment changed during the experiment")
+    if start.get("invocation") != end.get("invocation"):
+        raise ValueError("experiment invocation changed during the experiment")
 
 
 def write_provenance(path: Path, payload: dict) -> None:
@@ -168,7 +211,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--repository-root", type=Path, required=True)
     parser.add_argument("--qianji-root", type=Path, required=True)
     parser.add_argument("--script", type=Path, action="append", default=[])
+    parser.add_argument("--input", type=Path, action="append", default=[])
     parser.add_argument("--package", action="append")
+    parser.add_argument("--invocation-arg", action="append")
+    parser.add_argument("--working-directory", type=Path)
+    parser.add_argument("--verify-against", type=Path)
+    parser.add_argument("--require-clean", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -179,10 +227,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         repository_root=args.repository_root,
         qianji_root=args.qianji_root,
         script_paths=args.script,
+        input_paths=args.input,
         package_names=(
             DEFAULT_PACKAGES if args.package is None else args.package
         ),
+        invocation=args.invocation_arg,
+        working_directory=args.working_directory,
     )
+    if args.verify_against is not None:
+        baseline = json.loads(args.verify_against.read_text(encoding="utf-8"))
+        if not isinstance(baseline, dict):
+            raise ValueError("baseline provenance must contain a JSON object")
+        verify_unchanged_experiment_state(
+            baseline,
+            payload,
+            require_clean=args.require_clean,
+        )
+    elif args.require_clean:
+        verify_unchanged_experiment_state(
+            payload,
+            payload,
+            require_clean=True,
+        )
     write_provenance(args.output, payload)
     print(args.output.resolve())
     return 0

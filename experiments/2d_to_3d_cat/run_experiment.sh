@@ -7,7 +7,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FINAL_OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/outputs/experiments/2d_to_3d_cat}"
 
 MESH="${ANIMAL_DATA_ROOT}/data/processed/小猫_assimp.glb"
+VIDEO="${ANIMAL_DATA_ROOT}/data/processed/cat_walk_30fps_720p.mp4"
+PREDICTIONS="${ANIMAL_DATA_ROOT}/outputs/zero_shot/cat_walk/cat_walk_30fps_720p_superanimal_quadruped_hrnet_w32_fasterrcnn_resnet50_fpn_v2.h5"
 TRAJECTORY="${ANIMAL_DATA_ROOT}/outputs/manual_correction/cat_walk/review_v2_migrated/keypoint_trajectory_2d_corrected.json"
+CORRECTION_MANIFEST="${ANIMAL_DATA_ROOT}/outputs/manual_correction/cat_walk/cvat_export_v2/cvat_manifest.json"
+ANNOTATIONS="${ANIMAL_DATA_ROOT}/outputs/manual_correction/cat_walk/cvat_export_v2/annotations_migrated_from_review_v1_clean.xml"
+BASELINE_TRAJECTORY="${ANIMAL_DATA_ROOT}/outputs/semantic_six/cat_walk_v2/keypoint_trajectory_2d.json"
+IDENTITY_ANCHOR_MANIFEST="${ANIMAL_DATA_ROOT}/outputs/anchor_review/cat_walk_v2/identity_anchor_candidates.json"
 PYTHON="${PYTHON_BIN:-${REPO_ROOT}/.venv/bin/python}"
 
 for command in git mamba ffmpeg ffprobe; do
@@ -17,7 +23,10 @@ for command in git mamba ffmpeg ffprobe; do
   fi
 done
 
-for source in "$MESH" "$TRAJECTORY" "$PYTHON"; do
+for source in \
+  "$MESH" "$VIDEO" "$PREDICTIONS" "$TRAJECTORY" \
+  "$CORRECTION_MANIFEST" "$ANNOTATIONS" "$BASELINE_TRAJECTORY" \
+  "$IDENTITY_ANCHOR_MANIFEST" "$PYTHON"; do
   if [[ ! -f "$source" ]]; then
     printf 'Missing required source: %s\n' "$source" >&2
     exit 2
@@ -65,6 +74,40 @@ trap 'exit 130' HUP INT TERM
 OUTPUT_ROOT="$CASE_STAGING_ROOT"
 ROBOT="${OUTPUT_ROOT}/morphology/robot.json"
 RIG="${OUTPUT_ROOT}/rig_seed/rig_keypoints.json"
+START_PROVENANCE="${OUTPUT_ROOT}/.start_provenance.json"
+PROVENANCE_ARGS=(
+  --repository-root "$REPO_ROOT"
+  --qianji-root "$QIANJI_ROOT"
+  --script "${REPO_ROOT}/experiments/2d_to_3d_cat/run_experiment.sh"
+  --script "${REPO_ROOT}/experiments/2d_to_3d_cat/summarize_results.py"
+  --script "${REPO_ROOT}/src/qianji_animal_motion/lift_3d.py"
+  --script "${REPO_ROOT}/src/qianji_animal_motion/lift_cli.py"
+  --script "${QIANJI_SCRIPTS[0]}"
+  --script "${QIANJI_SCRIPTS[1]}"
+  --script "${QIANJI_SCRIPTS[2]}"
+  --input "$MESH"
+  --input "$VIDEO"
+  --input "$PREDICTIONS"
+  --input "$TRAJECTORY"
+  --input "$CORRECTION_MANIFEST"
+  --input "$ANNOTATIONS"
+  --input "$BASELINE_TRAJECTORY"
+  --input "$IDENTITY_ANCHOR_MANIFEST"
+  --invocation-arg bash
+  --invocation-arg "${REPO_ROOT}/experiments/2d_to_3d_cat/run_experiment.sh"
+  --invocation-arg "ANIMAL_DATA_ROOT=${ANIMAL_DATA_ROOT}"
+  --invocation-arg "QIANJI_ROOT=${QIANJI_ROOT}"
+  --invocation-arg "OUTPUT_ROOT=${FINAL_OUTPUT_ROOT}"
+  --working-directory "$REPO_ROOT"
+)
+PROVENANCE_CLEAN_FLAG="--require-clean"
+if [[ "${ALLOW_DIRTY_EXPERIMENT:-0}" == "1" ]]; then
+  PROVENANCE_CLEAN_FLAG=""
+fi
+"$PYTHON" -m qianji_animal_motion.experiment_provenance \
+  "${PROVENANCE_ARGS[@]}" \
+  ${PROVENANCE_CLEAN_FLAG:+"$PROVENANCE_CLEAN_FLAG"} \
+  --output "$START_PROVENANCE"
 
 cd "$QIANJI_ROOT"
 
@@ -87,7 +130,14 @@ for scale in 0.10 0.25 0.50; do
     --robot-json "$ROBOT" \
     --rig "$RIG" \
     --output "$SCALE_ROOT" \
-    --motion-scale "$scale"
+    --motion-scale "$scale" \
+    --video "$VIDEO" \
+    --predictions "$PREDICTIONS" \
+    --correction-manifest "$CORRECTION_MANIFEST" \
+    --annotations "$ANNOTATIONS" \
+    --baseline-trajectory "$BASELINE_TRAJECTORY" \
+    --identity-anchor-manifest "$IDENTITY_ANCHOR_MANIFEST" \
+    --case-root "$OUTPUT_ROOT"
 
   mamba run -n biomimic python controller/check_keypoint_reachability.py \
     --robot-json "$ROBOT" \
@@ -113,16 +163,12 @@ cd "$REPO_ROOT"
   --mesh "$MESH" \
   --trajectory "$TRAJECTORY"
 
-mamba run -n biomimic python \
-  "${REPO_ROOT}/src/qianji_animal_motion/experiment_provenance.py" \
-  --repository-root "$REPO_ROOT" \
-  --qianji-root "$QIANJI_ROOT" \
-  --script "${REPO_ROOT}/experiments/2d_to_3d_cat/run_experiment.sh" \
-  --script "${REPO_ROOT}/experiments/2d_to_3d_cat/summarize_results.py" \
-  --script "${QIANJI_SCRIPTS[0]}" \
-  --script "${QIANJI_SCRIPTS[1]}" \
-  --script "${QIANJI_SCRIPTS[2]}" \
+"$PYTHON" -m qianji_animal_motion.experiment_provenance \
+  "${PROVENANCE_ARGS[@]}" \
+  ${PROVENANCE_CLEAN_FLAG:+"$PROVENANCE_CLEAN_FLAG"} \
+  --verify-against "$START_PROVENANCE" \
   --output "${OUTPUT_ROOT}/experiment_provenance.json"
+rm "$START_PROVENANCE"
 
 if [[ -e "$FINAL_OUTPUT_ROOT" ]]; then
   printf 'OUTPUT_ROOT appeared during the run: %s\n' "$FINAL_OUTPUT_ROOT" >&2

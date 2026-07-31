@@ -26,6 +26,40 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _relative_case_path(path: Path, output_root: Path) -> str:
+    return path.resolve().relative_to(output_root).as_posix()
+
+
+def _validated_source_hashes(
+    sources: object,
+    output_root: Path,
+) -> dict[str, str]:
+    expected_labels = ("trajectory", "robot", "rig")
+    if not isinstance(sources, dict) or set(sources) != set(expected_labels):
+        raise ValueError("scale lift sources must contain trajectory, robot, and rig")
+    hashes = {}
+    for label in expected_labels:
+        item = sources[label]
+        if not isinstance(item, dict):
+            raise ValueError(f"scale lift source {label} is malformed")
+        raw_path = item.get("path")
+        digest = item.get("sha256")
+        if (
+            not isinstance(raw_path, str)
+            or not raw_path
+            or not isinstance(digest, str)
+            or len(digest) != 64
+        ):
+            raise ValueError(f"scale lift source {label} is malformed")
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = output_root / path
+        if not path.is_file() or _sha256(path) != digest:
+            raise ValueError(f"scale lift source {label} hash differs")
+        hashes[label] = digest
+    return hashes
+
+
 def summarize(output_root: Path, mesh: Path, trajectory: Path) -> dict:
     output_root = output_root.resolve()
     robot_path = output_root / "morphology/robot.json"
@@ -37,10 +71,39 @@ def summarize(output_root: Path, mesh: Path, trajectory: Path) -> dict:
     )
 
     scale_results = []
+    verified_scale_source_hashes = {
+        "trajectory": _sha256(trajectory),
+        "robot": _sha256(robot_path),
+        "rig": _sha256(rig_path),
+    }
+    verified_lineage_hashes: dict[str, str] | None = None
     for scale in SCALES:
         scale_name = f"{scale:.2f}"
         scale_root = output_root / f"scale_{scale_name}"
         lift = _load(scale_root / "lift_report.json")
+        if (
+            _validated_source_hashes(lift.get("sources"), output_root)
+            != verified_scale_source_hashes
+        ):
+            raise ValueError("scale lift sources differ across the sweep")
+        lineage = lift.get("verified_lineage")
+        if lineage:
+            if not isinstance(lineage, dict):
+                raise ValueError("scale verified lineage is malformed")
+            current_lineage = {
+                label: item.get("sha256")
+                for label, item in lineage.items()
+                if isinstance(item, dict)
+            }
+            if len(current_lineage) != len(lineage) or any(
+                not isinstance(digest, str) or len(digest) != 64
+                for digest in current_lineage.values()
+            ):
+                raise ValueError("scale verified lineage is malformed")
+            if verified_lineage_hashes is None:
+                verified_lineage_hashes = current_lineage
+            elif current_lineage != verified_lineage_hashes:
+                raise ValueError("scale verified lineage differs across the sweep")
         run = _load(scale_root / "reachability/run_summary.json")
         preview = _load(
             scale_root / "preview/keypoint_motion_preview_report.json"
@@ -103,14 +166,16 @@ def summarize(output_root: Path, mesh: Path, trajectory: Path) -> dict:
                 "sha256": _sha256(trajectory),
             },
             "robot": {
-                "path": str(robot_path),
+                "path": _relative_case_path(robot_path, output_root),
                 "sha256": _sha256(robot_path),
             },
             "rig": {
-                "path": str(rig_path),
+                "path": _relative_case_path(rig_path, output_root),
                 "sha256": _sha256(rig_path),
             },
         },
+        "verified_scale_source_hashes": verified_scale_source_hashes,
+        "verified_lineage_hashes": verified_lineage_hashes or {},
         "morphology": {
             "name": robot.get("name"),
             "sites": len(robot["sites"]),

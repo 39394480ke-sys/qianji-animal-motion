@@ -20,6 +20,12 @@ KEYPOINT_ROLES = (
 )
 
 _SPINE_ROLES = ("spine_rear", "spine_front")
+_FOOT_ROLES = (
+    "front_left_foot",
+    "front_right_foot",
+    "rear_left_foot",
+    "rear_right_foot",
+)
 TRAJECTORY_SCHEMA = "qianji.keypoint_trajectory_2d"
 SUPPORTED_TRAJECTORY_VERSIONS = frozenset({"1.2.0", "1.3.0"})
 IMAGE_COORDINATE_SYSTEM = "image_pixels_top_left_origin_x_right_y_down"
@@ -118,7 +124,16 @@ def _spine_geometry(frame: dict) -> tuple[np.ndarray, np.ndarray, float]:
         raise ValueError("frame spine must have positive torso length")
     forward = difference / torso_length
     up = np.asarray([forward[1], -forward[0]], dtype=float)
-    if up[1] > 0.0:
+    valid_feet = [
+        np.asarray([points[role]["x_px"], points[role]["y_px"]], dtype=float)
+        for role in _FOOT_ROLES
+        if _valid_point(points.get(role))
+    ]
+    if valid_feet:
+        ventral = np.mean(valid_feet, axis=0) - (rear + front) / 2.0
+        if float(up @ ventral) > 0.0:
+            up = -up
+    elif up[1] > 0.0:
         up = -up
     return (rear + front) / 2.0, np.stack([forward, up]), torso_length
 
