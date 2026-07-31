@@ -360,9 +360,10 @@ pytest
 ```
 
 GitHub Actions 会在 push 和 pull request 上使用 Python 3.12 跑完整测试，
-并执行来自固定 QianJi commit 的逐字节校验 converter 快照，验证 slide axis、
-控制范围和 30 根杆的 weld 端点合同；快照保留上游 Apache-2.0 许可证和源文件
-SHA-256。
+并预留固定 QianJi commit 的真实 converter 集成任务。由于 QianJi 是另一个
+私有仓库，Actions 只有在配置 `QIANJI_REPO_TOKEN` 时才执行该任务；本地测试
+始终校验 QianJi commit 和 converter 源文件 SHA-256，再验证 slide axis、控制
+范围和 30 根杆的 weld 端点合同。
 
 ## 与 QianJi 集成
 

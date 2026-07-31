@@ -9,13 +9,11 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 ROOT = Path(__file__).parents[1]
 PINNED_QIANJI_COMMIT = "3f3676c6cb7c198f7c9c43ce0b002f61d3d524a8"
-VENDORED_QIANJI_ROOT = (
-    ROOT / "tests/fixtures/qianji_converter_3f3676c"
-)
 PINNED_FILE_HASHES = {
     "mujoco_builder/json2xml_v7_perrod.py": (
         "77ebb0857042b48556abff65f54c7e51c7beec94cc468cf2ba8c2a655c4f77d4"
@@ -37,19 +35,16 @@ def test_pinned_qianji_converter_preserves_slide_and_weld_contract(
     tmp_path: Path,
 ) -> None:
     qianji_value = os.environ.get("QIANJI_INTEGRATION_ROOT")
-    qianji_root = (
-        VENDORED_QIANJI_ROOT
-        if qianji_value is None
-        else Path(qianji_value).resolve()
-    )
-    if qianji_value is not None:
-        commit = subprocess.run(
-            ["git", "-C", str(qianji_root), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        assert commit == PINNED_QIANJI_COMMIT
+    if qianji_value is None:
+        pytest.skip("real QianJi integration requires its private checkout")
+    qianji_root = Path(qianji_value).resolve()
+    commit = subprocess.run(
+        ["git", "-C", str(qianji_root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert commit == PINNED_QIANJI_COMMIT
     for relative, expected_hash in PINNED_FILE_HASHES.items():
         assert _sha256(qianji_root / relative) == expected_hash
 
