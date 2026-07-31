@@ -40,7 +40,10 @@ and at most 5% clipped or independently violated rods.
 
 The selected result is copied into the stable `landmarks/`, `control/`,
 `motion/`, and `previews/` paths. Raw candidate evidence remains under
-`candidates/`. The final verifier independently checks source lineage, 39-point
-semantics, desired/projected controls, NPZ positions, rod limits, selected
-robot/XML identity, previews, and experiment provenance. Automated acceptance
-does not replace the pending human visual review.
+`candidates/`. The final verifier replays the original H5 through observation,
+2.5D lifting, control mapping, and desired controls. It independently derives
+control errors, frame statuses, feasible fractions, NPZ rod limits, and checks
+the selected XML slide axes, actuators, and weld topology. Formal publication
+also requires unchanged clean repository, QianJi, tool, and input provenance.
+Automated acceptance does not replace human visual review of a newly generated
+version.
