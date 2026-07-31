@@ -2,7 +2,12 @@ import hashlib
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from qianji_animal_motion.experiment_provenance import build_provenance
+from qianji_animal_motion.experiment_provenance import (
+    verify_unchanged_experiment_state,
+)
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -103,3 +108,41 @@ def test_provenance_changes_when_qianji_revision_changes(tmp_path: Path) -> None
 
     assert before["qianji"]["commit"] != after["qianji"]["commit"]
     assert before != after
+
+
+def test_provenance_locks_inputs_tools_and_repositories_for_whole_run(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "repository", "repo-v1\n")
+    qianji = _repository(tmp_path / "qianji", "qianji-v1\n")
+    source = tmp_path / "trajectory.json"
+    source.write_text("{}\n", encoding="utf-8")
+    arguments = {
+        "repository_root": repository,
+        "qianji_root": qianji,
+        "script_paths": [qianji / "tracked.py"],
+        "input_paths": [source],
+        "package_names": [],
+        "invocation": ["bash", "run_experiment.sh"],
+        "working_directory": repository,
+    }
+
+    start = build_provenance(**arguments)
+    end = build_provenance(**arguments)
+
+    verify_unchanged_experiment_state(start, end, require_clean=True)
+    assert end["invocation"] == {
+        "argv": ["bash", "run_experiment.sh"],
+        "working_directory": str(repository.resolve()),
+    }
+    assert end["inputs"] == [
+        {
+            "path": str(source.resolve()),
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        }
+    ]
+
+    source.write_text('{"changed": true}\n', encoding="utf-8")
+    changed = build_provenance(**arguments)
+    with pytest.raises(ValueError, match="input files changed"):
+        verify_unchanged_experiment_state(start, changed, require_clean=True)

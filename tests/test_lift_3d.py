@@ -157,6 +157,35 @@ def test_camera_translation_rotation_and_zoom_are_removed() -> None:
         )
 
 
+def test_body_up_remains_continuous_when_spine_crosses_vertical() -> None:
+    robot, rig = _robot_and_rig()
+    before = _transform_2d(
+        REFERENCE_2D,
+        scale=1.0,
+        angle_degrees=89.0,
+        translation=(0.0, 0.0),
+    )
+    after = _transform_2d(
+        REFERENCE_2D,
+        scale=1.0,
+        angle_degrees=91.0,
+        translation=(0.0, 0.0),
+    )
+
+    result = lift_trajectory(
+        _trajectory([_frame(0, before), _frame(1, after)]),
+        robot,
+        rig,
+    )
+
+    for role in KEYPOINT_ROLES:
+        np.testing.assert_allclose(
+            _position(result, 1, role),
+            NEUTRAL[role],
+            atol=1e-12,
+        )
+
+
 def test_foot_lift_maps_to_up_without_inferred_lateral_motion() -> None:
     robot, rig = _robot_and_rig()
     lifted = dict(REFERENCE_2D)
@@ -320,6 +349,73 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _lineage_fixture(tmp_path: Path) -> tuple[dict, dict[str, Path]]:
+    sources = {
+        "video": tmp_path / "video.mp4",
+        "predictions": tmp_path / "predictions.h5",
+        "correction_manifest": tmp_path / "cvat_manifest.json",
+        "annotations": tmp_path / "annotations.xml",
+        "baseline_trajectory": tmp_path / "baseline.json",
+        "identity_anchor_manifest": tmp_path / "identity_anchor.json",
+    }
+    sources["video"].write_bytes(b"video")
+    sources["predictions"].write_bytes(b"predictions")
+    sources["annotations"].write_bytes(b"annotations")
+    sources["baseline_trajectory"].write_bytes(b"baseline")
+    _write_json(
+        sources["identity_anchor_manifest"],
+        {
+            "schema": "qianji.identity_anchor_candidates",
+            "schema_version": "1.1.0",
+            "video": {"sha256": _sha256(sources["video"])},
+            "predictions": {"sha256": _sha256(sources["predictions"])},
+        },
+    )
+    _write_json(
+        sources["correction_manifest"],
+        {
+            "schema": "qianji.cvat_correction_manifest",
+            "schema_version": "1.0.0",
+            "video_sha256": _sha256(sources["video"]),
+            "predictions_sha256": _sha256(sources["predictions"]),
+            "baseline_trajectory_sha256": _sha256(
+                sources["baseline_trajectory"]
+            ),
+            "video": {
+                "width": 100,
+                "height": 100,
+                "fps": 10.0,
+                "frame_count": 1,
+            },
+        },
+    )
+    trajectory = _trajectory()
+    trajectory["schema_version"] = "1.3.0"
+    trajectory["source"] = {
+        "video_sha256": _sha256(sources["video"]),
+        "predictions_sha256": _sha256(sources["predictions"]),
+    }
+    trajectory["identity_anchor"].update(
+        {
+            "video_sha256": _sha256(sources["video"]),
+            "predictions_sha256": _sha256(sources["predictions"]),
+            "manifest_sha256": _sha256(sources["identity_anchor_manifest"]),
+        }
+    )
+    trajectory["manual_correction"] = {
+        "baseline_trajectory_sha256": _sha256(
+            sources["baseline_trajectory"]
+        ),
+        "manifest_sha256": _sha256(sources["correction_manifest"]),
+        "annotations_sha256": _sha256(sources["annotations"]),
+    }
+    return trajectory, sources
+
+
 def test_run_lift_publishes_complete_hashed_artifact_set(
     tmp_path: Path,
 ) -> None:
@@ -359,6 +455,75 @@ def test_run_lift_publishes_complete_hashed_artifact_set(
             "sha256": hashlib.sha256(rig_path.read_bytes()).hexdigest(),
         },
     }
+
+
+def test_run_lift_verifies_complete_corrected_trajectory_lineage(
+    tmp_path: Path,
+) -> None:
+    robot, rig = _robot_and_rig()
+    trajectory, lineage_sources = _lineage_fixture(tmp_path)
+    trajectory_path = tmp_path / "trajectory.json"
+    robot_path = tmp_path / "robot.json"
+    rig_path = tmp_path / "rig.json"
+    _write_json(trajectory_path, trajectory)
+    _write_json(robot_path, robot)
+    _write_json(rig_path, rig)
+
+    outputs = run_lift(
+        trajectory_path=trajectory_path,
+        robot_path=robot_path,
+        rig_path=rig_path,
+        output_dir=tmp_path / "lifted",
+        lineage_paths=lineage_sources,
+    )
+
+    report = json.loads(outputs.report.read_text(encoding="utf-8"))
+    assert set(report["verified_lineage"]) == set(lineage_sources)
+    assert all(
+        item["sha256"] == _sha256(lineage_sources[label])
+        for label, item in report["verified_lineage"].items()
+    )
+
+    trajectory["source"]["video_sha256"] = "0" * 64
+    _write_json(trajectory_path, trajectory)
+    with pytest.raises(ValueError, match="video.*lineage"):
+        run_lift(
+            trajectory_path=trajectory_path,
+            robot_path=robot_path,
+            rig_path=rig_path,
+            output_dir=tmp_path / "mismatched",
+            lineage_paths=lineage_sources,
+        )
+
+
+def test_run_lift_records_case_internal_sources_as_relative_paths(
+    tmp_path: Path,
+) -> None:
+    robot, rig = _robot_and_rig()
+    case_root = tmp_path / "case-staging"
+    morphology = case_root / "morphology"
+    morphology.mkdir(parents=True)
+    trajectory_path = tmp_path / "trajectory.json"
+    robot_path = morphology / "robot.json"
+    rig_path = morphology / "rig.json"
+    _write_json(trajectory_path, _trajectory())
+    _write_json(robot_path, robot)
+    _write_json(rig_path, rig)
+
+    outputs = run_lift(
+        trajectory_path=trajectory_path,
+        robot_path=robot_path,
+        rig_path=rig_path,
+        output_dir=case_root / "scale_0.10",
+        case_root=case_root,
+    )
+
+    report = json.loads(outputs.report.read_text(encoding="utf-8"))
+    assert report["sources"]["trajectory"]["path"] == str(
+        trajectory_path.resolve()
+    )
+    assert report["sources"]["robot"]["path"] == "morphology/robot.json"
+    assert report["sources"]["rig"]["path"] == "morphology/rig.json"
 
 
 def test_run_lift_refuses_overwrite_and_missing_sources(tmp_path: Path) -> None:
