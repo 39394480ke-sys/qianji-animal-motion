@@ -7,13 +7,15 @@ QianJi 仿生运动研究的动物数据准备工具。项目把静态 3D Mesh �
 - 将视频标准化为 30 FPS、720p、H.264 MP4。
 - 将 DeepLabCut SuperAnimal-Quadruped 的 39 点 H5 映射为六点二维轨迹。
 - 将六点轨迹导入 CVAT 人工复核，再导回独立版本。
+- 将六点的身体相对二维运动重定向到由动物 Mesh 生成的 QianJi 四足 rig。
 
 原始 FBX、视频和 39 点 H5 均不会被修改。多文件结果采用暂存后整体发布，
 中途失败不会留下半套产物；每轮人工校正也不会覆盖自动基线。
 
-> **当前边界：** 本仓库输出的是图像像素坐标中的二维关键点，不是 QianJi
-> 可直接消费的三维世界坐标。进入三维驱动前仍需相机标定、多视角三角化或
-> 经过验证的单目三维估计，以及骨架绑定和尺度对齐。详见
+> **当前边界：** 二维轨迹仍是原始观测。新增的三维结果是身体相对的 2.5D
+> 重定向：Mesh rig 提供中性三维位置，视频只提供躯干纵向和竖直方向的相对
+> 变化。它不是相机标定后的世界坐标或单目深度估计。详见
+> [实验说明](docs/experimental_2d_to_3d_mesh.md)和
 > [数据契约](docs/data_contract.md)。
 
 ## 处理流程
@@ -31,7 +33,12 @@ flowchart LR
     I --> J[自动轨迹 + 质量报告 + 预览]
     J --> K[CVAT 人工复核]
     K --> L[校正轨迹 + 修改记录 + 预览]
-    L --> M[后续 2D 到 3D 与骨架绑定]
+    L --> M[身体相对 2.5D 重定向]
+    N[动物 GLB] --> O[QianJi Mesh 转 VGT]
+    O --> P[四足六点 rig]
+    P --> M
+    M --> Q[3D 关键点运动]
+    Q --> R[QianJi 预览与可达性]
 ```
 
 DeepLabCut 模型下载和 39 点推理由 DeepLabCut 完成。本仓库保留其 H5 输出，
@@ -100,7 +107,8 @@ qianji-animal-motion/
 │   └── processed/                   GLB 和标准化视频
 ├── docs/
 │   ├── cvat_manual_correction.md    CVAT 操作教程
-│   └── data_contract.md             二维轨迹与版本契约
+│   ├── data_contract.md             二维与三维输出契约
+│   └── experimental_2d_to_3d_mesh.md  Mesh 重定向实验说明
 ├── outputs/
 │   ├── zero_shot/                   DeepLabCut 原始 39 点预测
 │   ├── anchor_review/               身份锚点候选
@@ -277,6 +285,28 @@ review_v1/
 置信度误认为人工置信度。完整步骤见
 [CVAT 六点人工校正教程](docs/cvat_manual_correction.md)。
 
+## 7. 重定向到 QianJi 四足 rig
+
+先在 QianJi 中从同一动物 GLB 生成 `robot.json`，并用
+`quadruped_bbox` 生成六点 `rig_keypoints.json`。然后运行：
+
+```bash
+qianji-lift-keypoints \
+  --trajectory outputs/manual_correction/cat_walk/review_v2/keypoint_trajectory_2d_corrected.json \
+  --robot-json path/to/qianji/morphology/robot.json \
+  --rig path/to/qianji/rig_keypoints.json \
+  --output outputs/experiments/cat_lift_scale_010 \
+  --motion-scale 0.10
+```
+
+输出 `keypoint_motion.json`、`mesh_binding.json` 和 `lift_report.json`。
+第一个文件可直接交给 QianJi 的关键点预览与几何可达性工具；另外两个文件
+记录中性位置、坐标基、源文件哈希、假设和无效点替代。默认使用
+`identity_anchor.frame_idx` 作为中性参考帧并拒绝覆盖。
+
+本仓库的真实小猫复现实验及尺度比较见
+[实验说明](docs/experimental_2d_to_3d_mesh.md)。
+
 ## 数据安全与版本
 
 三层轨迹始终分开：
@@ -305,6 +335,7 @@ qianji-suggest-anchor --help
 qianji-map-keypoints --help
 qianji-export-cvat --help
 qianji-import-cvat --help
+qianji-lift-keypoints --help
 pytest
 ```
 
@@ -312,10 +343,10 @@ GitHub Actions 会在 push 和 pull request 上使用 Python 3.12 跑完整测�
 
 ## 与 QianJi 集成
 
-本仓库是 QianJi 上游的数据准备层。只把本项目自有代码和人工确认后的输入
-接入 `QianJi/video_pose_extraction`，不复制上游 DeepLabCut 源码。二维结果
-进入 QianJi 前，应按 [数据契约](docs/data_contract.md) 完成经过验证的
-2D 到 3D、坐标系转换、尺度对齐和骨架绑定。
+本仓库是 QianJi 上游的数据准备层，不复制上游 DeepLabCut 或 QianJi 源码。
+二维证据可以通过本仓库的受限 2.5D 适配器进入 QianJi；需要真实世界运动时，
+仍应按 [数据契约](docs/data_contract.md) 增加相机标定、多视角或经过验证的
+三维估计。
 
 ## License
 

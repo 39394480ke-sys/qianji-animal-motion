@@ -41,6 +41,34 @@ SHA-256，便于独立追溯。
 
 ## QianJi 边界
 
-QianJi 后续若需要世界坐标 `[x, y, z, confidence]`，还必须经过相机标定、
-多视角三角化或经过验证的单目三维估计，再进行骨架绑定和尺度对齐。本仓库
-目前不提供这一步，也不会用固定深度或零值补出伪三维数据。
+### 身体相对 2.5D 输出
+
+`qianji-lift-keypoints` 输出三份不可覆盖、整体发布的文件：
+
+- `keypoint_motion.json`：Schema 为 `qianji-keypoint-trajectory-v1`，每点
+  为 `[x, y, z, confidence]`。
+- `mesh_binding.json`：六个角色到 QianJi site 的映射、中性位置、三维坐标
+  基，以及 trajectory、robot、rig 的绝对路径和 SHA-256。
+- `lift_report.json`：参考帧、尺度、位移统计、逐点替代记录和科学边界。
+
+每帧以两个躯干点定义身体二维纵向，以画面向上定义局部竖直，并用该帧躯干
+长度归一化。相对于参考帧的纵向、竖直变化映射到 QianJi 中性 rig 的 forward
+和 up 方向。Mesh rig 原有的 lateral 坐标保留，不从视频推断深度。因此报告
+固定包含：
+
+```text
+reconstruction_kind: body_relative_2_5d_retarget
+metric_depth_observed: false
+camera_calibrated: false
+global_translation_preserved: false
+```
+
+单点无效时输出该角色的中性坐标和置信度 `0.0`；躯干无效时整帧如此处理。
+不会跨帧插值、平滑或沿 lateral 方向制造运动。QianJi 当前控制器不会用
+confidence 自动屏蔽目标，所以中性替代也是控制安全策略，而非缺失值填零。
+
+### 不可替代的真实三维
+
+需要相机或世界坐标中的真实三维运动时，仍必须使用相机标定、多视角三角化
+或经过验证的单目三维估计，并进行尺度与骨架校准。2.5D 输出不能用于声称
+观测到了深度、全局位移、生物关节角或完整 Mesh 形变。
