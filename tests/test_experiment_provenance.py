@@ -1,5 +1,6 @@
 import hashlib
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,7 @@ def test_provenance_records_revisions_scripts_environment_and_dirty_state(
         script_paths=[script],
         package_names=["pytest", "package-that-does-not-exist"],
         invocation=["run_experiment.sh", "--fixture"],
+        qianji_python_command=[sys.executable],
     )
 
     assert clean["schema"] == "qianji.experiment_provenance"
@@ -60,6 +62,8 @@ def test_provenance_records_revisions_scripts_environment_and_dirty_state(
     assert clean["environment"]["python_version"]
     assert clean["environment"]["python_executable"]
     assert clean["environment"]["packages"]["pytest"]
+    assert clean["qianji_environment"]["python_executable"] == sys.executable
+    assert clean["qianji_environment"]["packages"]["pytest"]
     assert clean["invocation"]["argv"] == [
         "run_experiment.sh",
         "--fixture",
@@ -125,6 +129,7 @@ def test_provenance_locks_inputs_tools_and_repositories_for_whole_run(
         "package_names": [],
         "invocation": ["bash", "run_experiment.sh"],
         "working_directory": repository,
+        "qianji_python_command": [sys.executable],
     }
 
     start = build_provenance(**arguments)
@@ -141,6 +146,7 @@ def test_provenance_locks_inputs_tools_and_repositories_for_whole_run(
             "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         }
     ]
+    assert end["qianji_environment"]["python_executable"] == sys.executable
 
     source.write_text('{"changed": true}\n', encoding="utf-8")
     changed = build_provenance(**arguments)

@@ -8,6 +8,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -94,6 +95,58 @@ def _repository_state(repository: Path) -> dict:
     }
 
 
+def _python_environment(
+    package_names: Sequence[str],
+    command: Sequence[str] | None = None,
+) -> dict:
+    names = sorted(set(package_names))
+    if command is None:
+        packages = {}
+        for name in names:
+            try:
+                packages[name] = importlib.metadata.version(name)
+            except importlib.metadata.PackageNotFoundError:
+                packages[name] = None
+        return {
+            "conda_default_env": os.environ.get("CONDA_DEFAULT_ENV"),
+            "conda_prefix": os.environ.get("CONDA_PREFIX"),
+            "python_executable": sys.executable,
+            "python_version": platform.python_version(),
+            "packages": packages,
+        }
+    if not command:
+        raise ValueError("Python environment command cannot be empty")
+    source = (
+        "import importlib.metadata,json,os,platform,sys;"
+        f"names={names!r};"
+        "packages={};"
+        "\nfor name in names:\n"
+        " try: packages[name]=importlib.metadata.version(name)\n"
+        " except importlib.metadata.PackageNotFoundError: packages[name]=None\n"
+        "print(json.dumps({"
+        "'conda_default_env':os.environ.get('CONDA_DEFAULT_ENV'),"
+        "'conda_prefix':os.environ.get('CONDA_PREFIX'),"
+        "'python_executable':sys.executable,"
+        "'python_version':platform.python_version(),"
+        "'packages':packages}))"
+    )
+    try:
+        completed = subprocess.run(
+            [*command, "-c", source],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(completed.stdout)
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as error:
+        raise ValueError(
+            "could not inspect the QianJi Python environment"
+        ) from error
+    if not isinstance(payload, dict):
+        raise ValueError("QianJi Python environment output is malformed")
+    return payload
+
+
 def build_provenance(
     *,
     repository_root: Path,
@@ -103,6 +156,7 @@ def build_provenance(
     package_names: Sequence[str] = DEFAULT_PACKAGES,
     invocation: Sequence[str] | None = None,
     working_directory: Path | None = None,
+    qianji_python_command: Sequence[str] | None = None,
 ) -> dict:
     """Build a deterministic provenance payload for one experiment run."""
     scripts = []
@@ -117,13 +171,6 @@ def build_provenance(
         if not path.is_file():
             raise FileNotFoundError(f"provenance input does not exist: {path}")
         inputs.append({"path": str(path), "sha256": _sha256(path)})
-
-    packages = {}
-    for name in sorted(set(package_names)):
-        try:
-            packages[name] = importlib.metadata.version(name)
-        except importlib.metadata.PackageNotFoundError:
-            packages[name] = None
 
     return {
         "schema": "qianji.experiment_provenance",
@@ -142,13 +189,12 @@ def build_provenance(
                 ).resolve()
             ),
         },
-        "environment": {
-            "conda_default_env": os.environ.get("CONDA_DEFAULT_ENV"),
-            "conda_prefix": os.environ.get("CONDA_PREFIX"),
-            "python_executable": sys.executable,
-            "python_version": platform.python_version(),
-            "packages": packages,
-        },
+        "environment": _python_environment(package_names),
+        "qianji_environment": (
+            None
+            if qianji_python_command is None
+            else _python_environment(package_names, qianji_python_command)
+        ),
     }
 
 
@@ -176,6 +222,8 @@ def verify_unchanged_experiment_state(
         raise ValueError("input files changed during the experiment")
     if start.get("environment") != end.get("environment"):
         raise ValueError("Python environment changed during the experiment")
+    if start.get("qianji_environment") != end.get("qianji_environment"):
+        raise ValueError("QianJi Python environment changed during the experiment")
     if start.get("invocation") != end.get("invocation"):
         raise ValueError("experiment invocation changed during the experiment")
 
@@ -215,6 +263,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--package", action="append")
     parser.add_argument("--invocation-arg", action="append")
     parser.add_argument("--working-directory", type=Path)
+    parser.add_argument("--qianji-python-command")
     parser.add_argument("--verify-against", type=Path)
     parser.add_argument("--require-clean", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
@@ -233,6 +282,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         invocation=args.invocation_arg,
         working_directory=args.working_directory,
+        qianji_python_command=(
+            None
+            if args.qianji_python_command is None
+            else shlex.split(args.qianji_python_command)
+        ),
     )
     if args.verify_against is not None:
         baseline = json.loads(args.verify_against.read_text(encoding="utf-8"))

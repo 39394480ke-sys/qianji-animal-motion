@@ -77,7 +77,15 @@ def test_2d_experiment_failure_does_not_publish_partial_case(
     executable_root = tmp_path / "bin"
     executable_root.mkdir()
     mamba = executable_root / "mamba"
-    mamba.write_text("#!/bin/sh\nexit 23\n", encoding="utf-8")
+    mamba.write_text(
+        "#!/bin/sh\n"
+        'if [ "$5" = "-c" ]; then\n'
+        "  shift 4\n"
+        '  exec "$PYTHON_BIN" "$@"\n'
+        "fi\n"
+        "exit 23\n",
+        encoding="utf-8",
+    )
     mamba.chmod(0o755)
 
     output_root = tmp_path / "published-case"
